@@ -1,0 +1,23 @@
+{
+  "speech_dir": "eval/data_config/speech",
+  "game_dir": "eval/data_config/game_audio",
+  "output_dir": "eval/dev_dataset",
+  "test_output_dir": "/tmp/voicescan_test_dataset",
+  "snr_targets_db": [-5.0, 0.0, 5.0, 10.0, 20.0],
+  "degradation_chains": [
+    ["none"],
+    ["opus_16k"],
+    ["opus_24k"],
+    ["opus_32k"],
+    ["agc"],
+    ["bandlimit"],
+    ["light_denoise"],
+    ["opus_24k", "agc"]
+  ],
+  "clip_duration_seconds": 10.0,
+  "overlap_probability": 0.25,
+  "dev_speaker_ratio": 0.5,
+  "enrollment_clips_per_speaker": 2,
+  "sample_rate": 16000,
+  "seed": 42
+}

@@ -1,0 +1,153 @@
+# VoiceScan System Design
+
+## 1. Product Description
+VoiceScan is a fully local, privacy-first Windows application and high-performance CLI engine designed to enroll a person's voice and scan long audio and video recordings (primarily gameplay captures where multiple players' voice chat is mixed with game audio, music, and sound effects) to pinpoint exactly where that specific person speaks, or verify their absence.
+
+### Core Principles
+- **100% Offline & Private:** Zero network calls, zero telemetry, and zero third-party cloud dependencies at runtime. Protects sensitive biometric voice data and complies with strict privacy standards (e.g., UK GDPR Special Category biometric data).
+- **Fast Enrollment:** Uses pre-trained speaker verification embeddings rather than per-user model training. Enrolls a voice profile in seconds by averaging embeddings from short clean reference clips.
+- **Hardware Acceleration:** Native Windows C#/.NET 8+ engine utilizing ONNX Runtime with NVIDIA CUDA execution provider for high-throughput batch inference.
+- **Reproducible Evaluation:** All operational claims and decision thresholds are anchored in an automated evaluation harness with statistical confidence bounds.
+
+---
+
+## 2. Verdict Model: Match / Possible / No Match
+Raw similarity scores and binary thresholds are brittle in mixed gameplay audio due to acoustic clutter, shouting, background game dialogue, and codec artifacts. VoiceScan employs a 3-tier verdict model supplemented with diagnostic reason flags:
+
+```
+Score Distribution:
+[ 0.0 -------------- T_possible -------------- T_match -------------- 1.0 ]
+       No Match               Possible                  Match
+```
+
+### Verdict Definitions
+- **Match:** High-confidence detection where segment similarity exceeds upper threshold $T_{\text{match}}$ with continuous temporal support and strong cluster purity.
+- **Possible:** Ambiguous signal where similarity falls between $T_{\text{possible}}$ and $T_{\text{match}}$, or where a high score occurs under challenging acoustic conditions. Triaged for human verification.
+- **No Match:** High confidence that the target speaker is absent across all speech segments in the file.
+
+### Diagnostic Reason Flags
+For any segment flagged as `Possible` (and low-confidence `Match`), the engine attaches diagnostic reason flags:
+- `LOW_SNR`: Estimated signal-to-noise ratio is low (speech masked by heavy game noise, explosions, or soundtrack).
+- `SUSPECTED_OVERLAP`: Concurrent multi-speaker speech detected in the window.
+- `SHORT_SEGMENT`: Speech duration is under minimum duration (e.g. $< 1.0\,\text{s}$), reducing embedding stability.
+- `CODEC_DEGRADATION`: Extreme compression artifacts (e.g. low-bitrate Opus Discord stream).
+
+---
+
+## 3. End-to-End Processing Pipeline
+
+```mermaid
+flowchart TD
+    A[Input Media File] --> B[FFmpeg Chunked Stream Decode]
+    B --> C{Multi-track Audio?}
+    C -- Yes: Voice Track Identified --> D[Select Voice Track]
+    C -- No: Single Mix --> E[Mixed Audio Stream]
+    D --> F[16 kHz Mono Float PCM Stream]
+    E --> F
+    F --> G[Silero VAD - Speech Interval Detection]
+    G --> H[Sliding Windowing: 2s Window, 1s Hop]
+    H --> I[Batched ONNX Embedding Extraction on CUDA]
+    I --> J[Within-File Speaker Clustering - AHC]
+    J --> K[Cluster Scoring with AS-Norm]
+    K --> L[Temporal Smoothing & Segment Aggregation]
+    L --> M[Segment Verdicts: Match / Possible / No match]
+```
+
+### Pipeline Stages
+1. **Decode:** FFmpeg streams audio directly to 16 kHz mono 32-bit float PCM in chunks. multi-hour files stream through a bounded memory ring buffer, preventing memory growth.
+2. **Optional Multi-Track Select:** Media containers (MKV, MP4) are inspected for multiple audio tracks. If a dedicated voice-chat or microphone track is present (standard in OBS multi-track recording), the engine selects it directly, bypassing background game separation.
+3. **Voice Activity Detection (VAD):** Silero VAD (ONNX) operates on streaming frames to filter out non-speech regions (silence, pure gunshots, background music) and outputs speech intervals.
+4. **Windowing:** Fixed 2.0-second sliding windows with a 1.0-second hop (50% overlap) extracted strictly across active speech regions.
+5. **Speaker Embedding Extraction:** Batched ONNX Runtime GPU inference (using models such as WeSpeaker ResNet34, CAM++, or ECAPA-TDNN) converts each speech window into a fixed-dimensional unit-normalized vector.
+6. **Within-File Speaker Clustering:** Agglomerative Hierarchical Clustering (AHC) clusters all window embeddings within the file into speaker identities. A cluster centroid embedding is computed per speaker turn. Scoring clusters rather than individual noisy windows eliminates single-frame false alarms.
+7. **Cluster Scoring with Score Normalization:** Cosine similarity between target profile centroid and file cluster embeddings. Adaptive Symmetric Score Normalization (AS-Norm) calibrates similarity scores against a pre-indexed cohort of non-target impostor embeddings.
+8. **Temporal Smoothing & Segment Aggregation:** Window-level and cluster-level scores are mapped back to audio timestamps. Adjacent hits within $\Delta t_{\text{merge}}$ (e.g., 0.5s) are merged into continuous speech turns. Isolated single-window spikes lacking temporal support are discarded.
+9. **Verdict & Segment Generation:** Output formatted as timestamped segments with start/end times, verdict classification, calibrated confidence score, and reason flags.
+
+---
+
+## 4. Embedding Cache Architecture
+
+Scanning multi-hour libraries for multiple voice profiles requires fast re-scan capabilities. The embedding cache decouples heavy audio decoding and neural extraction from target profile matching.
+
+```
++--------------------------------------------------------------------------------+
+| Cache Key = SHA256( FileHash + ModelVersion + VADSettings + WindowSettings )    |
++--------------------------------------------------------------------------------+
+                                       |
+                                       v
+                    +------------------------------------+
+                    |        SQLite Local Storage        |
+                    |  - Window Timestamps (Start, End)  |
+                    |  - High-dimensional Embedding Blocs|
+                    |  - Speech Energy & VAD Metadata    |
+                    +------------------------------------+
+```
+
+### Design Invariants
+1. **Deterministic Cache Keying:**
+   - `FileHash`: Hybrid file hash (file size + head/tail 1MB samples + periodic block sampling, with optional full SHA-256 validation).
+   - `ModelVersion`: Identifier of the embedding model and weights.
+   - `VADSettings`: Threshold, speech pad, and minimum duration configuration.
+   - `WindowSettings`: Window duration (2.0s) and hop step (1.0s).
+2. **Instant Multi-Profile Re-Scan:** When scanning a new voice profile against a previously processed audio collection, Stages 1 through 5 are skipped. Embeddings are read directly from SQLite, reducing scan duration from minutes to seconds per file.
+3. **Invalidation Semantics:** Changing model architecture, weights, or windowing invalidates cached embeddings. Adding or updating a voice profile invalidates only scoring verdicts.
+
+---
+
+## 5. Success Metrics & Evaluation Standards
+
+Per-window error rates (e.g., standard EER) are unrepresentative for long-form gameplay audio: in a 10-hour recording (~36,000 windows), a 1% false alarm rate produces 360 false detections. VoiceScan measures performance at the file and segment level.
+
+### Target Performance Gate
+
+| Metric | Target (SNR $\ge 10\,\text{dB}$) | Target (SNR $0\text{--}10\,\text{dB}$) |
+|---|---|---|
+| **False Alarms per Hour (FA/hr)** | $\le 1.0$ false hit / hr | $\le 3.0$ false hits / hr |
+| **Per-File Recall** | $\ge 90\%$ target present | $\ge 75\%$ target present |
+| **Per-File Precision** | $\ge 90\%$ | $\ge 80\%$ |
+| **End-to-End Processing Speed** | $\ge 30\times$ realtime (GPU) | $\ge 30\times$ realtime (GPU) |
+
+### Evaluation Rigor
+- **Stratified SNR Buckets:** Metrics must be reported separately across four SNR buckets: Clean ($\ge 20\,\text{dB}$), Moderate ($10\text{--}20\,\text{dB}$), Low ($0\text{--}10\,\text{dB}$), and Harsh ($-5\text{--}0\,\text{dB}$).
+- **Degradation Matrices:** Breakdown by Opus codec compression (16, 24, 32, 64 kbps), automatic gain control (AGC), and background noise type.
+- **Statistical Uncertainty:** Every reported metric must include non-parametric **95% Bootstrap Confidence Intervals** calculated across speakers and files. Single headline numbers without confidence intervals are rejected.
+
+---
+
+## 6. Desktop UI, Benchmark Integration & Evidence Reporting
+
+The user application layer (`/app`) provides a fluent WinUI 3 interface built upon the headless `VoiceScan.Core` engine, decoupled into 5 specialized screens:
+
+1. **Enrollment Wizard (`EnrollmentWizardView`):**
+   - Microphone capture or file import.
+   - Enforced ethical and legal consent gate (`HasConsent == true`).
+   - Plain-language audio quality verification (speech duration $\ge 4.0\,\text{s}$, SNR check, background noise level).
+   - Generates persistent voice profile (`.json`) with multi-condition augmentation (Opus & AGC simulation).
+
+2. **Scan Dashboard (`ScanView`):**
+   - Audio folder or batch file picker with profile multi-selection.
+   - Real-time scanning progress: per-file status, overall ETA, processing speed multiple ($\ge 10\times\text{--}50\times$), GPU / CPU device indicators.
+   - Asynchronous cancellation and resume mechanisms.
+
+3. **Results & Timeline (`ResultsView`):**
+   - File listing with tri-state verdict badges (`Match`, `Possible`, `No match`).
+   - Interactive waveform timeline rendering hit segments, confidence scores, and diagnostic reason flags.
+   - Audio player with scrubbing cursor and click-to-play at hit timestamps.
+
+4. **Review Queue & Active Learning (`ReviewView`):**
+   - Human-in-the-loop review interface: Confirm or Reject segment hits.
+   - Confirmed segments incrementally update the voice profile centroid.
+   - Rejected segments populate the local impostor negative cohort in SQLite (`ReviewDatabase`).
+
+5. **Benchmark & Evaluation Metrics (`BenchmarkView`):**
+   - Direct integration with `/eval` test harness output (`eval/reports/*/eval_results.json`).
+   - Real measured performance metrics: Overall Recall, Precision, FA/hour, and Mean Timing Error.
+   - Stratified SNR breakdown tables displaying empirical 95% bootstrap confidence intervals ($[L, U]$) to guarantee transparent accuracy claims.
+
+6. **Evidence Report Export & Local Auditing (`EvidenceReportExporter`):**
+   - Forensic-grade audit reports exported directly in PDF 1.4 and CSV formats.
+   - Per-segment audit fields: SHA-256 media hash, timestamps, verdict, calibrated confidence, reason flags, profile name, model version, settings snapshot, and scan date.
+   - Hit audio slicer extracting 16 kHz WAV audio clips into `audio_hits/` for immediate playback and external review.
+   - Thread-safe local file logging to `logs/voicescan.log` with automatic CUDA fallback warnings and error recovery.
+

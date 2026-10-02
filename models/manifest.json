@@ -1,0 +1,36 @@
+{
+  "manifest_version": "1.0.0",
+  "updated_at": "2026-10-01T22:47:00Z",
+  "models": [
+    {
+      "name": "silero_vad",
+      "filename": "silero_vad.onnx",
+      "model_type": "vad",
+      "source_url": "https://raw.githubusercontent.com/snakers4/silero-vad/master/src/silero_vad/data/silero_vad.onnx",
+      "sha256": "1a153a22f4509e292a94e67d6f9b85e8deb25b4988682b7e174c65279d8788e3",
+      "license_type": "MIT",
+      "license_text_location": "https://github.com/snakers4/silero-vad/blob/master/LICENSE",
+      "notes": "Silero VAD v5 official ONNX model."
+    },
+    {
+      "name": "wespeaker_en_voxceleb_resnet34",
+      "filename": "wespeaker_en_voxceleb_resnet34.onnx",
+      "model_type": "speaker_embedding",
+      "source_url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models/wespeaker_en_voxceleb_resnet34.onnx",
+      "sha256": "5ef208a9da1453335308a6b6f4e6dfbd7e183a38b604de0a57664f45d257fe94",
+      "license_type": "Apache-2.0 (code) / Non-Commercial (VoxCeleb weights)",
+      "license_text_location": "https://github.com/wenet-e2e/wespeaker/blob/master/LICENSE",
+      "notes": "WeSpeaker ResNet34 embedding extractor (256-dim). Trained on VoxCeleb 1 & 2."
+    },
+    {
+      "name": "campplus_sv_zh_en_16k_common_advanced",
+      "filename": "3dspeaker_speech_campplus_sv_zh_en_16k-common_advanced.onnx",
+      "model_type": "speaker_embedding",
+      "source_url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models/3dspeaker_speech_campplus_sv_zh_en_16k-common_advanced.onnx",
+      "sha256": "aa3cfc16963a10586a9393f5035d6d6b57e98d358b347f80c2a30bf4f00ceba2",
+      "license_type": "Apache-2.0",
+      "license_text_location": "https://github.com/alibaba-damo-academy/3D-Speaker/blob/main/LICENSE",
+      "notes": "Alibaba DAMO Academy CAM++ 3D-Speaker embedding extractor (192-dim / 512-dim)."
+    }
+  ]
+}

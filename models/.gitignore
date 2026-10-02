@@ -1,0 +1,13 @@
+# Ignore all model weight binaries
+*.onnx
+*.onnx.data
+*.bin
+*.pt
+*.pth
+*.tar.gz
+*.zip
+
+# Preserve gitkeep, readme, and manifest
+!.gitignore
+!README.md
+!manifest.json

@@ -1,0 +1,1 @@
+[2026-10-01T22:01:34.745651+00:00] FINAL RUN commit=e9aac47 dataset=/tmp/voicescan_test_eval recall=100.0% prec=100.0% fa_per_hr=0.00 eer=0.00% speed=9897.2x

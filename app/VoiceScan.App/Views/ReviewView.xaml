@@ -1,0 +1,116 @@
+<Page
+    x:Class="VoiceScan.App.Views.ReviewView"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    xmlns:models="using:VoiceScan.App.Core.Models">
+
+    <Grid RowDefinitions="Auto,*" ColumnDefinitions="380,*" Margin="8">
+        <!-- Header -->
+        <StackPanel Grid.Row="0" Grid.ColumnSpan="2" Spacing="6" Margin="0,0,0,16">
+            <TextBlock Text="Human Review &amp; Active Verification Queue" Style="{StaticResource TitleLargeTextBlockStyle}" />
+            <TextBlock Text="Triage ambiguous segments, confirm positive speech to augment profiles, and store negatives in SQLite." Style="{StaticResource SubtitleTextBlockStyle}" />
+        </StackPanel>
+
+        <!-- Left Pane: Review Queue -->
+        <Border Grid.Row="1" Grid.Column="0" Background="{ThemeResource SurfaceCardBrush}" BorderBrush="{ThemeResource SurfaceCardBorderBrush}" BorderThickness="1" CornerRadius="8" Padding="12" Margin="0,0,16,0">
+            <Grid RowDefinitions="Auto,*">
+                <TextBlock Grid.Row="0" Text="Pending Verification Queue" FontWeight="SemiBold" FontSize="16" Margin="0,0,0,12" />
+
+                <ListView Grid.Row="1" x:Name="QueueListView" SelectionChanged="QueueListView_SelectionChanged">
+                    <ListView.ItemTemplate>
+                        <DataTemplate x:DataType="models:ReviewQueueItem">
+                            <Grid ColumnDefinitions="Auto,*,Auto" Padding="4,6">
+                                <Border Grid.Column="0" CornerRadius="4" Padding="6,2" Margin="0,0,8,0" Background="{ThemeResource VerdictPossibleBrush}" VerticalAlignment="Center">
+                                    <TextBlock Text="{x:Bind Segment.Verdict}" Foreground="White" FontSize="11" FontWeight="Bold" />
+                                </Border>
+
+                                <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                                    <TextBlock Text="{x:Bind FileName}" FontWeight="Medium" TextTrimming="CharacterEllipsis" />
+                                    <TextBlock Text="{x:Bind Segment.StartTimeSeconds, Mode=OneWay}" FontSize="11" Foreground="{ThemeResource TextSecondaryBrush}" />
+                                </StackPanel>
+
+                                <TextBlock Grid.Column="2" Text="{x:Bind Segment.Confidence, Mode=OneWay}" FontWeight="Bold" VerticalAlignment="Center" Margin="8,0,0,0" />
+                            </Grid>
+                        </DataTemplate>
+                    </ListView.ItemTemplate>
+                </ListView>
+            </Grid>
+        </Border>
+
+        <!-- Right Pane: Triage Decision Card & History -->
+        <Grid Grid.Row="1" Grid.Column="1" RowDefinitions="Auto,*">
+            <!-- Decision Action Card -->
+            <Border Grid.Row="0" Background="{ThemeResource SurfaceCardBrush}" BorderBrush="{ThemeResource SurfaceCardBorderBrush}" BorderThickness="1" CornerRadius="8" Padding="20" Margin="0,0,0,16">
+                <StackPanel Spacing="16">
+                    <Grid ColumnDefinitions="*,Auto">
+                        <StackPanel Grid.Column="0" Spacing="4">
+                            <TextBlock x:Name="SelectedSegmentTitleText" Text="Select a segment from the review queue." FontWeight="SemiBold" FontSize="18" />
+                            <TextBlock x:Name="SelectedSegmentDetailText" Text="" FontSize="12" Foreground="{ThemeResource TextSecondaryBrush}" />
+                        </StackPanel>
+                        <Button Grid.Column="1" x:Name="PlaySnippetButton" Content="▶️ Listen to Hit" Click="PlaySnippetButton_Click" IsEnabled="False" />
+                    </Grid>
+
+                    <!-- Confidence & Flags -->
+                    <Grid ColumnDefinitions="Auto,*,Auto">
+                        <StackPanel Grid.Column="0">
+                            <TextBlock Text="CONFIDENCE" Style="{StaticResource MetricLabelTextBlockStyle}" />
+                            <TextBlock x:Name="ConfidenceText" Text="-- " Style="{StaticResource MetricValueTextBlockStyle}" Foreground="{ThemeResource BrandPrimaryBrush}" />
+                        </StackPanel>
+
+                        <StackPanel Grid.Column="1" Margin="24,0">
+                            <TextBlock Text="ACOUSTIC REASON FLAGS" Style="{StaticResource MetricLabelTextBlockStyle}" />
+                            <StackPanel x:Name="ReasonFlagsPanel" Orientation="Horizontal" Spacing="6" Margin="0,4,0,0" />
+                        </StackPanel>
+                    </Grid>
+
+                    <!-- Reviewer Notes -->
+                    <TextBox x:Name="ReviewNotesInput" Header="Reviewer Notes / Verification Justification" PlaceholderText="Optional notes recorded to audit trail..." />
+
+                    <CheckBox x:Name="AddToProfileCheckBox" Content="Add confirmed audio to voice profile (incremental biometric adaptation)" IsChecked="True" />
+
+                    <!-- Action Buttons -->
+                    <StackPanel Orientation="Horizontal" Spacing="12">
+                        <Button x:Name="ConfirmButton" Content="✅ Confirm as Match (Add to Profile)" Click="ConfirmButton_Click" Style="{StaticResource AccentButtonStyle}" Padding="16,8" IsEnabled="False" />
+                        <Button x:Name="RejectButton" Content="❌ Reject as False Alarm (Store Negative)" Click="RejectButton_Click" Padding="16,8" IsEnabled="False" />
+                    </StackPanel>
+
+                    <TextBlock x:Name="ActionStatusText" Foreground="{ThemeResource BrandPrimaryBrush}" FontWeight="Medium" />
+                </StackPanel>
+            </Border>
+
+            <!-- SQLite Audit Trail / Decision History -->
+            <Border Grid.Row="1" Background="{ThemeResource SurfaceCardBrush}" BorderBrush="{ThemeResource SurfaceCardBorderBrush}" BorderThickness="1" CornerRadius="8" Padding="16">
+                <Grid RowDefinitions="Auto,*">
+                    <TextBlock Grid.Row="0" Text="SQLite Verification Decisions (Audit Trail)" FontWeight="SemiBold" FontSize="16" Margin="0,0,0,12" />
+
+                    <ListView Grid.Row="1" x:Name="HistoryListView">
+                        <ListView.ItemTemplate>
+                            <DataTemplate x:DataType="models:ReviewDecisionRecord">
+                                <Grid ColumnDefinitions="Auto,*,Auto,Auto" Padding="4,6">
+                                    <!-- Decision Badge -->
+                                    <Border Grid.Column="0" CornerRadius="4" Padding="6,2" Margin="0,0,8,0" Background="{ThemeResource VerdictMatchBrush}" VerticalAlignment="Center">
+                                        <TextBlock Text="{x:Bind Decision}" Foreground="White" FontSize="11" FontWeight="Bold" />
+                                    </Border>
+
+                                    <!-- File and Interval -->
+                                    <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                                        <TextBlock Text="{x:Bind FilePath}" FontWeight="Medium" TextTrimming="CharacterEllipsis" />
+                                        <TextBlock Text="{x:Bind StartTimeSeconds, Mode=OneWay}" FontSize="11" Foreground="{ThemeResource TextSecondaryBrush}" />
+                                    </StackPanel>
+
+                                    <!-- Confidence -->
+                                    <TextBlock Grid.Column="2" Text="{x:Bind Confidence, Mode=OneWay}" FontWeight="SemiBold" VerticalAlignment="Center" Margin="12,0" />
+
+                                    <!-- Timestamp -->
+                                    <TextBlock Grid.Column="3" Text="{x:Bind DecidedAtUtc, Mode=OneWay}" FontSize="11" Foreground="{ThemeResource TextSecondaryBrush}" VerticalAlignment="Center" />
+                                </Grid>
+                            </DataTemplate>
+                        </ListView.ItemTemplate>
+                    </ListView>
+                </Grid>
+            </Border>
+        </Grid>
+    </Grid>
+</Page>

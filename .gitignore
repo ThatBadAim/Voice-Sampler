@@ -1,0 +1,60 @@
+# .NET build artifacts
+[Bb]in/
+[Oo]bj/
+[Ll]og/
+[Ll]ogs/
+.vs/
+*.user
+*.suo
+
+# Python artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.pytest_cache/
+.coverage
+htmlcov/
+.env
+.venv/
+venv/
+env/
+
+# Models & Weights (never commit ONNX or weights)
+models/*.onnx
+models/*.onnx.data
+models/*.bin
+models/*.pt
+models/*.pth
+models/*.tar.gz
+models/*.zip
+!models/.gitkeep
+!models/README.md
+!models/manifest.json
+
+# Local and OS files
+.DS_Store
+Thumbs.db
+
+# Graphify local cache
+graphify-out/cache/
+graphify-out/.graphify_*
+graphify-out/.needs_update
+
+# Evaluation generated datasets & audio data
+eval/dev_dataset/
+eval/*_dataset/
+eval/reports/
+eval/data_config/speech/
+eval/data_config/game_audio/
+*.wav
+
+# Evaluation external / held-out data safety
+/test_set/
+/held_out_test/
+
+# Local databases and CLI outputs
+*.db
+*.db-wal
+*.db-shm
+*.profile.json

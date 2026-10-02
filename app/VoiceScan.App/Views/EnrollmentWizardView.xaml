@@ -1,0 +1,113 @@
+<Page
+    x:Class="VoiceScan.App.Views.EnrollmentWizardView"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006">
+
+    <ScrollViewer VerticalScrollBarVisibility="Auto">
+        <StackPanel Spacing="24" MaxWidth="800" HorizontalAlignment="Left" Margin="8">
+            <!-- Header -->
+            <StackPanel Spacing="6">
+                <TextBlock Text="Voice Profile Enrollment Wizard" Style="{StaticResource TitleLargeTextBlockStyle}" />
+                <TextBlock Text="Enroll a target voice profile from clean speech samples. 100% offline biometric extraction." Style="{StaticResource SubtitleTextBlockStyle}" />
+            </StackPanel>
+
+            <!-- Step Progress Indicator -->
+            <ProgressBar x:Name="WizardProgressBar" Minimum="1" Maximum="4" Value="1" Height="4" />
+
+            <!-- Step 1: Audio Selection -->
+            <Border Background="{ThemeResource SurfaceCardBrush}" BorderBrush="{ThemeResource SurfaceCardBorderBrush}" BorderThickness="1" CornerRadius="8" Padding="20">
+                <StackPanel Spacing="16">
+                    <TextBlock Text="Step 1: Reference Audio Source" FontWeight="SemiBold" FontSize="18" />
+                    <TextBlock Text="Provide 5 to 30 seconds of clean speech with minimal background noise. You can import audio or record directly." Style="{StaticResource BodyTextBlockStyle}" />
+
+                    <StackPanel Orientation="Horizontal" Spacing="12">
+                        <Button x:Name="BrowseAudioButton" Content="📁 Import Audio Clip(s)..." Click="BrowseAudioButton_Click" Style="{StaticResource AccentButtonStyle}" />
+                        <Button x:Name="RecordMicButton" Content="🎙️ Record from Microphone" Click="RecordMicButton_Click" />
+                    </StackPanel>
+
+                    <TextBlock x:Name="SelectedFilePathText" Text="No file selected." Foreground="{ThemeResource TextSecondaryBrush}" FontStyle="Italic" />
+                </StackPanel>
+            </Border>
+
+            <!-- Step 2: Audio Quality Diagnostics & Plain Feedback -->
+            <Border Background="{ThemeResource SurfaceCardBrush}" BorderBrush="{ThemeResource SurfaceCardBorderBrush}" BorderThickness="1" CornerRadius="8" Padding="20">
+                <StackPanel Spacing="16">
+                    <TextBlock Text="Step 2: Acoustic Quality Diagnostics" FontWeight="SemiBold" FontSize="18" />
+                    <TextBlock Text="Acoustic validation verifies speech duration, noise floor, and signal-to-noise ratio before biometric encoding." Style="{StaticResource BodyTextBlockStyle}" />
+
+                    <Button x:Name="RunQualityCheckButton" Content="⚡ Run Acoustic Analysis" Click="RunQualityCheckButton_Click" />
+
+                    <!-- Quality Metrics Grid -->
+                    <Grid ColumnDefinitions="*,*,*" RowDefinitions="Auto" Margin="0,8">
+                        <StackPanel Grid.Column="0">
+                            <TextBlock Text="SPEECH DURATION" Style="{StaticResource MetricLabelTextBlockStyle}" />
+                            <TextBlock x:Name="SpeechDurationText" Text="-- s" Style="{StaticResource MetricValueTextBlockStyle}" />
+                            <TextBlock Text="Min 4.0s required" FontSize="11" Foreground="{ThemeResource TextSecondaryBrush}" />
+                        </StackPanel>
+
+                        <StackPanel Grid.Column="1">
+                            <TextBlock Text="ESTIMATED SNR" Style="{StaticResource MetricLabelTextBlockStyle}" />
+                            <TextBlock x:Name="SnrText" Text="-- dB" Style="{StaticResource MetricValueTextBlockStyle}" />
+                            <TextBlock Text="Optimal: ≥ 12 dB" FontSize="11" Foreground="{ThemeResource TextSecondaryBrush}" />
+                        </StackPanel>
+
+                        <StackPanel Grid.Column="2">
+                            <TextBlock Text="NOISE FLOOR" Style="{StaticResource MetricLabelTextBlockStyle}" />
+                            <TextBlock x:Name="NoiseFloorText" Text="-- RMS" Style="{StaticResource MetricValueTextBlockStyle}" />
+                            <TextBlock Text="Lower is cleaner" FontSize="11" Foreground="{ThemeResource TextSecondaryBrush}" />
+                        </StackPanel>
+                    </Grid>
+
+                    <!-- Plain Feedback Box -->
+                    <Border x:Name="FeedbackBox" Background="#260078D4" BorderBrush="#800078D4" BorderThickness="1" CornerRadius="6" Padding="12" Visibility="Collapsed">
+                        <StackPanel Spacing="4">
+                            <TextBlock Text="Diagnostic Feedback:" FontWeight="SemiBold" />
+                            <TextBlock x:Name="FeedbackMessageText" TextWrapping="Wrap" />
+                        </StackPanel>
+                    </Border>
+                </StackPanel>
+            </Border>
+
+            <!-- Step 3: Mandatory Consent Step -->
+            <Border Background="{ThemeResource SurfaceCardBrush}" BorderBrush="{ThemeResource SurfaceCardBorderBrush}" BorderThickness="1" CornerRadius="8" Padding="20">
+                <StackPanel Spacing="16">
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <TextBlock Text="🛡️ Mandatory Biometric Consent" FontWeight="SemiBold" FontSize="18" />
+                        <Border Background="#33D83B01" CornerRadius="4" Padding="6,2">
+                            <TextBlock Text="REQUIRED BY LAW" FontSize="11" FontWeight="Bold" Foreground="#D83B01" />
+                        </Border>
+                    </StackPanel>
+
+                    <TextBlock Text="VoiceScan extracts sensitive biometric voiceprints solely for local, on-device comparison in compliance with privacy regulations (including UK GDPR Article 9 Special Category Biometric Data). Under no circumstances are biometric templates transmitted over the network." TextWrapping="Wrap" Style="{StaticResource BodyTextBlockStyle}" />
+
+                    <!-- Mandatory Consent Checkbox -->
+                    <CheckBox x:Name="ConsentCheckBox" Checked="ConsentCheckBox_Changed" Unchecked="ConsentCheckBox_Changed">
+                        <TextBlock Text="I explicitly certify that the person whose voice this is has consented to biometric voice enrollment." FontWeight="Medium" />
+                    </CheckBox>
+                </StackPanel>
+            </Border>
+
+            <!-- Step 4: Named Profile & Multi-Condition -->
+            <Border Background="{ThemeResource SurfaceCardBrush}" BorderBrush="{ThemeResource SurfaceCardBorderBrush}" BorderThickness="1" CornerRadius="8" Padding="20">
+                <StackPanel Spacing="16">
+                    <TextBlock Text="Step 4: Named Profile &amp; Enrollment" FontWeight="SemiBold" FontSize="18" />
+
+                    <TextBox x:Name="ProfileNameInput" Header="Profile Name" Text="TargetSpeaker" PlaceholderText="e.g. Alice, Bob_Discord" />
+
+                    <CheckBox x:Name="MultiConditionCheckBox" IsChecked="True">
+                        <StackPanel>
+                            <TextBlock Text="Multi-condition enrollment augmentation (Recommended)" FontWeight="Medium" />
+                            <TextBlock Text="Augments reference speech with AGC dynamics and game background mixes to maximize recall in noisy gameplay." FontSize="12" Foreground="{ThemeResource TextSecondaryBrush}" />
+                        </StackPanel>
+                    </CheckBox>
+
+                    <Button x:Name="CreateProfileButton" Content="✨ Generate &amp; Save Voice Profile" Click="CreateProfileButton_Click" Style="{StaticResource AccentButtonStyle}" HorizontalAlignment="Left" Padding="24,10" IsEnabled="False" />
+
+                    <TextBlock x:Name="StatusMessageText" Foreground="{ThemeResource BrandPrimaryBrush}" FontWeight="Medium" />
+                </StackPanel>
+            </Border>
+        </StackPanel>
+    </ScrollViewer>
+</Page>

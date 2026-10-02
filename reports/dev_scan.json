@@ -1,0 +1,489 @@
+{
+  "schema_version": "1.0.0",
+  "scan_metadata": {
+    "timestamp": "2026-10-02T16:03:14.3016726Z",
+    "profile_name": "Charlie",
+    "model_id": "wespeaker-resnet34",
+    "engine_version": "0.1.0",
+    "elapsed_seconds": 17.739,
+    "threshold": 0.48
+  },
+  "files": [
+    {
+      "file_path": "/home/tba/.gemini/antigravity-ide/scratch/Voice-Sampler/eval/dev_dataset/audio/dev_clip_0000.wav",
+      "clip_id": "dev_clip_0000.wav",
+      "duration_seconds": 10,
+      "audio_track_index": 0,
+      "verdict": "Possible",
+      "max_confidence": 0.4243,
+      "segments": [
+        {
+          "start_time_seconds": 0,
+          "end_time_seconds": 10,
+          "confidence": 0.4243,
+          "verdict": "Possible",
+          "reason_flags": [
+            "LOW_SNR"
+          ]
+        }
+      ]
+    },
+    {
+      "file_path": "/home/tba/.gemini/antigravity-ide/scratch/Voice-Sampler/eval/dev_dataset/audio/dev_clip_0001.wav",
+      "clip_id": "dev_clip_0001.wav",
+      "duration_seconds": 10,
+      "audio_track_index": 0,
+      "verdict": "Match",
+      "max_confidence": 0.5579,
+      "segments": [
+        {
+          "start_time_seconds": 0,
+          "end_time_seconds": 10,
+          "confidence": 0.5579,
+          "verdict": "Match",
+          "reason_flags": [
+            "LOW_SNR"
+          ]
+        }
+      ]
+    },
+    {
+      "file_path": "/home/tba/.gemini/antigravity-ide/scratch/Voice-Sampler/eval/dev_dataset/audio/dev_clip_0002.wav",
+      "clip_id": "dev_clip_0002.wav",
+      "duration_seconds": 10,
+      "audio_track_index": 0,
+      "verdict": "Possible",
+      "max_confidence": 0.4587,
+      "segments": [
+        {
+          "start_time_seconds": 0,
+          "end_time_seconds": 10,
+          "confidence": 0.4587,
+          "verdict": "Possible",
+          "reason_flags": [
+            "LOW_SNR"
+          ]
+        }
+      ]
+    },
+    {
+      "file_path": "/home/tba/.gemini/antigravity-ide/scratch/Voice-Sampler/eval/dev_dataset/audio/dev_clip_0003.wav",
+      "clip_id": "dev_clip_0003.wav",
+      "duration_seconds": 10,
+      "audio_track_index": 0,
+      "verdict": "Possible",
+      "max_confidence": 0.4276,
+      "segments": [
+        {
+          "start_time_seconds": 0,
+          "end_time_seconds": 10,
+          "confidence": 0.4276,
+          "verdict": "Possible",
+          "reason_flags": [
+            "SUSPECTED_OVERLAP"
+          ]
+        }
+      ]
+    },
+    {
+      "file_path": "/home/tba/.gemini/antigravity-ide/scratch/Voice-Sampler/eval/dev_dataset/audio/dev_clip_0004.wav",
+      "clip_id": "dev_clip_0004.wav",
+      "duration_seconds": 10,
+      "audio_track_index": 0,
+      "verdict": "Match",
+      "max_confidence": 0.5729,
+      "segments": [
+        {
+          "start_time_seconds": 0,
+          "end_time_seconds": 10,
+          "confidence": 0.5729,
+          "verdict": "Match",
+          "reason_flags": [
+            "LOW_SNR"
+          ]
+        }
+      ]
+    },
+    {
+      "file_path": "/home/tba/.gemini/antigravity-ide/scratch/Voice-Sampler/eval/dev_dataset/audio/dev_clip_0005.wav",
+      "clip_id": "dev_clip_0005.wav",
+      "duration_seconds": 10,
+      "audio_track_index": 0,
+      "verdict": "Possible",
+      "max_confidence": 0.447,
+      "segments": [
+        {
+          "start_time_seconds": 0,
+          "end_time_seconds": 10,
+          "confidence": 0.447,
+          "verdict": "Possible",
+          "reason_flags": [
+            "LOW_SNR",
+            "SUSPECTED_OVERLAP"
+          ]
+        }
+      ]
+    },
+    {
+      "file_path": "/home/tba/.gemini/antigravity-ide/scratch/Voice-Sampler/eval/dev_dataset/audio/dev_clip_0006.wav",
+      "clip_id": "dev_clip_0006.wav",
+      "duration_seconds": 10,
+      "audio_track_index": 0,
+      "verdict": "Possible",
+      "max_confidence": 0.4665,
+      "segments": [
+        {
+          "start_time_seconds": 0,
+          "end_time_seconds": 10,
+          "confidence": 0.4665,
+          "verdict": "Possible",
+          "reason_flags": [
+            "LOW_SNR"
+          ]
+        }
+      ]
+    },
+    {
+      "file_path": "/home/tba/.gemini/antigravity-ide/scratch/Voice-Sampler/eval/dev_dataset/audio/dev_clip_0007.wav",
+      "clip_id": "dev_clip_0007.wav",
+      "duration_seconds": 10,
+      "audio_track_index": 0,
+      "verdict": "Match",
+      "max_confidence": 0.5306,
+      "segments": [
+        {
+          "start_time_seconds": 0,
+          "end_time_seconds": 10,
+          "confidence": 0.5306,
+          "verdict": "Match",
+          "reason_flags": [
+            "LOW_SNR"
+          ]
+        }
+      ]
+    },
+    {
+      "file_path": "/home/tba/.gemini/antigravity-ide/scratch/Voice-Sampler/eval/dev_dataset/audio/dev_clip_0008.wav",
+      "clip_id": "dev_clip_0008.wav",
+      "duration_seconds": 10,
+      "audio_track_index": 0,
+      "verdict": "Match",
+      "max_confidence": 0.5196,
+      "segments": [
+        {
+          "start_time_seconds": 0,
+          "end_time_seconds": 10,
+          "confidence": 0.5196,
+          "verdict": "Match",
+          "reason_flags": []
+        }
+      ]
+    },
+    {
+      "file_path": "/home/tba/.gemini/antigravity-ide/scratch/Voice-Sampler/eval/dev_dataset/audio/dev_clip_0009.wav",
+      "clip_id": "dev_clip_0009.wav",
+      "duration_seconds": 10,
+      "audio_track_index": 0,
+      "verdict": "Possible",
+      "max_confidence": 0.443,
+      "segments": [
+        {
+          "start_time_seconds": 0,
+          "end_time_seconds": 10,
+          "confidence": 0.443,
+          "verdict": "Possible",
+          "reason_flags": [
+            "LOW_SNR"
+          ]
+        }
+      ]
+    },
+    {
+      "file_path": "/home/tba/.gemini/antigravity-ide/scratch/Voice-Sampler/eval/dev_dataset/audio/dev_clip_0010.wav",
+      "clip_id": "dev_clip_0010.wav",
+      "duration_seconds": 10,
+      "audio_track_index": 0,
+      "verdict": "Match",
+      "max_confidence": 0.5418,
+      "segments": [
+        {
+          "start_time_seconds": 0,
+          "end_time_seconds": 10,
+          "confidence": 0.5418,
+          "verdict": "Match",
+          "reason_flags": [
+            "LOW_SNR",
+            "SUSPECTED_OVERLAP"
+          ]
+        }
+      ]
+    },
+    {
+      "file_path": "/home/tba/.gemini/antigravity-ide/scratch/Voice-Sampler/eval/dev_dataset/audio/dev_clip_0011.wav",
+      "clip_id": "dev_clip_0011.wav",
+      "duration_seconds": 10,
+      "audio_track_index": 0,
+      "verdict": "Match",
+      "max_confidence": 0.5248,
+      "segments": [
+        {
+          "start_time_seconds": 0,
+          "end_time_seconds": 10,
+          "confidence": 0.5248,
+          "verdict": "Match",
+          "reason_flags": []
+        }
+      ]
+    },
+    {
+      "file_path": "/home/tba/.gemini/antigravity-ide/scratch/Voice-Sampler/eval/dev_dataset/audio/dev_clip_0012.wav",
+      "clip_id": "dev_clip_0012.wav",
+      "duration_seconds": 10,
+      "audio_track_index": 0,
+      "verdict": "Match",
+      "max_confidence": 0.5489,
+      "segments": [
+        {
+          "start_time_seconds": 0,
+          "end_time_seconds": 10,
+          "confidence": 0.5489,
+          "verdict": "Match",
+          "reason_flags": [
+            "LOW_SNR"
+          ]
+        }
+      ]
+    },
+    {
+      "file_path": "/home/tba/.gemini/antigravity-ide/scratch/Voice-Sampler/eval/dev_dataset/audio/dev_clip_0013.wav",
+      "clip_id": "dev_clip_0013.wav",
+      "duration_seconds": 10,
+      "audio_track_index": 0,
+      "verdict": "Match",
+      "max_confidence": 0.5372,
+      "segments": [
+        {
+          "start_time_seconds": 0,
+          "end_time_seconds": 10,
+          "confidence": 0.5372,
+          "verdict": "Match",
+          "reason_flags": [
+            "LOW_SNR"
+          ]
+        }
+      ]
+    },
+    {
+      "file_path": "/home/tba/.gemini/antigravity-ide/scratch/Voice-Sampler/eval/dev_dataset/audio/dev_clip_0014.wav",
+      "clip_id": "dev_clip_0014.wav",
+      "duration_seconds": 10,
+      "audio_track_index": 0,
+      "verdict": "Possible",
+      "max_confidence": 0.4426,
+      "segments": [
+        {
+          "start_time_seconds": 0,
+          "end_time_seconds": 10,
+          "confidence": 0.4426,
+          "verdict": "Possible",
+          "reason_flags": [
+            "SUSPECTED_OVERLAP"
+          ]
+        }
+      ]
+    },
+    {
+      "file_path": "/home/tba/.gemini/antigravity-ide/scratch/Voice-Sampler/eval/dev_dataset/audio/dev_clip_0015.wav",
+      "clip_id": "dev_clip_0015.wav",
+      "duration_seconds": 10,
+      "audio_track_index": 0,
+      "verdict": "Match",
+      "max_confidence": 0.5591,
+      "segments": [
+        {
+          "start_time_seconds": 0,
+          "end_time_seconds": 10,
+          "confidence": 0.5591,
+          "verdict": "Match",
+          "reason_flags": [
+            "LOW_SNR"
+          ]
+        }
+      ]
+    },
+    {
+      "file_path": "/home/tba/.gemini/antigravity-ide/scratch/Voice-Sampler/eval/dev_dataset/audio/dev_clip_0016.wav",
+      "clip_id": "dev_clip_0016.wav",
+      "duration_seconds": 10,
+      "audio_track_index": 0,
+      "verdict": "Possible",
+      "max_confidence": 0.4685,
+      "segments": [
+        {
+          "start_time_seconds": 0,
+          "end_time_seconds": 10,
+          "confidence": 0.4685,
+          "verdict": "Possible",
+          "reason_flags": [
+            "LOW_SNR"
+          ]
+        }
+      ]
+    },
+    {
+      "file_path": "/home/tba/.gemini/antigravity-ide/scratch/Voice-Sampler/eval/dev_dataset/audio/dev_clip_0017.wav",
+      "clip_id": "dev_clip_0017.wav",
+      "duration_seconds": 10,
+      "audio_track_index": 0,
+      "verdict": "Possible",
+      "max_confidence": 0.4403,
+      "segments": [
+        {
+          "start_time_seconds": 0,
+          "end_time_seconds": 10,
+          "confidence": 0.4403,
+          "verdict": "Possible",
+          "reason_flags": [
+            "LOW_SNR"
+          ]
+        }
+      ]
+    },
+    {
+      "file_path": "/home/tba/.gemini/antigravity-ide/scratch/Voice-Sampler/eval/dev_dataset/audio/dev_clip_0018.wav",
+      "clip_id": "dev_clip_0018.wav",
+      "duration_seconds": 10,
+      "audio_track_index": 0,
+      "verdict": "Possible",
+      "max_confidence": 0.479,
+      "segments": [
+        {
+          "start_time_seconds": 0,
+          "end_time_seconds": 10,
+          "confidence": 0.492,
+          "verdict": "Possible",
+          "reason_flags": [
+            "LOW_SNR"
+          ]
+        }
+      ]
+    },
+    {
+      "file_path": "/home/tba/.gemini/antigravity-ide/scratch/Voice-Sampler/eval/dev_dataset/audio/dev_clip_0019.wav",
+      "clip_id": "dev_clip_0019.wav",
+      "duration_seconds": 10,
+      "audio_track_index": 0,
+      "verdict": "Possible",
+      "max_confidence": 0.4196,
+      "segments": [
+        {
+          "start_time_seconds": 0,
+          "end_time_seconds": 10,
+          "confidence": 0.4196,
+          "verdict": "Possible",
+          "reason_flags": [
+            "LOW_SNR"
+          ]
+        }
+      ]
+    },
+    {
+      "file_path": "/home/tba/.gemini/antigravity-ide/scratch/Voice-Sampler/eval/dev_dataset/audio/dev_clip_0020.wav",
+      "clip_id": "dev_clip_0020.wav",
+      "duration_seconds": 10,
+      "audio_track_index": 0,
+      "verdict": "Possible",
+      "max_confidence": 0.4432,
+      "segments": [
+        {
+          "start_time_seconds": 0,
+          "end_time_seconds": 10,
+          "confidence": 0.4432,
+          "verdict": "Possible",
+          "reason_flags": [
+            "LOW_SNR",
+            "SUSPECTED_OVERLAP"
+          ]
+        }
+      ]
+    },
+    {
+      "file_path": "/home/tba/.gemini/antigravity-ide/scratch/Voice-Sampler/eval/dev_dataset/audio/dev_clip_0021.wav",
+      "clip_id": "dev_clip_0021.wav",
+      "duration_seconds": 10,
+      "audio_track_index": 0,
+      "verdict": "Possible",
+      "max_confidence": 0.4483,
+      "segments": [
+        {
+          "start_time_seconds": 0,
+          "end_time_seconds": 10,
+          "confidence": 0.4483,
+          "verdict": "Possible",
+          "reason_flags": [
+            "LOW_SNR",
+            "SUSPECTED_OVERLAP"
+          ]
+        }
+      ]
+    },
+    {
+      "file_path": "/home/tba/.gemini/antigravity-ide/scratch/Voice-Sampler/eval/dev_dataset/audio/dev_clip_0022.wav",
+      "clip_id": "dev_clip_0022.wav",
+      "duration_seconds": 10,
+      "audio_track_index": 0,
+      "verdict": "Match",
+      "max_confidence": 0.521,
+      "segments": [
+        {
+          "start_time_seconds": 0,
+          "end_time_seconds": 10,
+          "confidence": 0.521,
+          "verdict": "Match",
+          "reason_flags": [
+            "LOW_SNR",
+            "SUSPECTED_OVERLAP"
+          ]
+        }
+      ]
+    },
+    {
+      "file_path": "/home/tba/.gemini/antigravity-ide/scratch/Voice-Sampler/eval/dev_dataset/audio/dev_clip_0023.wav",
+      "clip_id": "dev_clip_0023.wav",
+      "duration_seconds": 10,
+      "audio_track_index": 0,
+      "verdict": "Possible",
+      "max_confidence": 0.4734,
+      "segments": [
+        {
+          "start_time_seconds": 0,
+          "end_time_seconds": 10,
+          "confidence": 0.4734,
+          "verdict": "Possible",
+          "reason_flags": [
+            "LOW_SNR"
+          ]
+        }
+      ]
+    },
+    {
+      "file_path": "/home/tba/.gemini/antigravity-ide/scratch/Voice-Sampler/eval/dev_dataset/audio/dev_clip_0024.wav",
+      "clip_id": "dev_clip_0024.wav",
+      "duration_seconds": 10,
+      "audio_track_index": 0,
+      "verdict": "Match",
+      "max_confidence": 0.5723,
+      "segments": [
+        {
+          "start_time_seconds": 0,
+          "end_time_seconds": 10,
+          "confidence": 0.5723,
+          "verdict": "Match",
+          "reason_flags": [
+            "LOW_SNR"
+          ]
+        }
+      ]
+    }
+  ]
+}
