@@ -413,7 +413,7 @@ public class AppLayerTests : IDisposable
 
             var settings = new ReportExportSettings(
                 ProfileName: "TargetPlayer",
-                ModelId: "wespeaker-resnet34",
+                ModelId: "speechbrain-ecapa-tdnn",
                 EngineVersion: "1.0.0",
                 Threshold: 0.65,
                 ClusterThreshold: 0.40,
@@ -525,7 +525,7 @@ public class AppLayerTests : IDisposable
         try
         {
             var vm = new ResultsViewModel(new AudioPlaybackController());
-            vm.ExportSettingsProvider = () => new ReportExportSettings("temp", "wespeaker-resnet34", "0.1.0", 0.48, 0.40, true, DateTimeOffset.UtcNow);
+            vm.ExportSettingsProvider = () => new ReportExportSettings("temp", "speechbrain-ecapa-tdnn", "0.1.0", 0.48, 0.40, true, DateTimeOffset.UtcNow);
 
             await vm.ExportReportAsync(dir);
             Assert.False(Directory.Exists(dir)); // nothing to export yet

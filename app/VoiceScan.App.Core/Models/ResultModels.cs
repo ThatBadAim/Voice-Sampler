@@ -34,7 +34,9 @@ public sealed record HitSegmentResult(
     string Verdict,
     double Confidence,
     IReadOnlyList<string> ReasonFlags,
-    ReviewDecision Decision = ReviewDecision.Unreviewed);
+    ReviewDecision Decision = ReviewDecision.Unreviewed,
+    float[]? SegmentEmbedding = null,
+    string? FileHash = null);
 
 public sealed record FileVerdictResult(
     string FilePath,

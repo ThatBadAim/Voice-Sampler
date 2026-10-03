@@ -9,7 +9,7 @@ APP_DIR="${ROOT_DIR}/dist/win-x64"
 PAYLOAD="${ROOT_DIR}/dist/payload.zip"
 PACKAGES="${ROOT_DIR}/dist/packages"
 
-for model in silero_vad.onnx wespeaker_en_voxceleb_resnet34.onnx; do
+for model in ecapa_tdnn.onnx titanet_small.onnx; do
     if [ ! -f "${ROOT_DIR}/models/${model}" ]; then
         echo "ERROR: models/${model} is missing. See models/manifest.json for the download link and checksum." >&2
         exit 1
@@ -25,7 +25,7 @@ dotnet publish "${ROOT_DIR}/app/VoiceScan.Avalonia/VoiceScan.Avalonia.csproj" \
 
 echo "==> Bundling models and licenses..."
 mkdir -p "${APP_DIR}/models"
-cp "${ROOT_DIR}/models/silero_vad.onnx" "${ROOT_DIR}/models/wespeaker_en_voxceleb_resnet34.onnx" "${ROOT_DIR}/models/manifest.json" "${APP_DIR}/models/"
+cp "${ROOT_DIR}/models/ecapa_tdnn.onnx" "${ROOT_DIR}/models/titanet_small.onnx" "${ROOT_DIR}/models/manifest.json" "${APP_DIR}/models/"
 cp "${ROOT_DIR}/docs/LICENSES.md" "${APP_DIR}/LICENSES.md"
 
 echo "==> Creating installer payload..."

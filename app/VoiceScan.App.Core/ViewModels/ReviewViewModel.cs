@@ -1,8 +1,10 @@
 using System.Collections.ObjectModel;
 using System.ComponentModel;
+using System.IO;
 using System.Runtime.CompilerServices;
 using VoiceScan.App.Core.Models;
 using VoiceScan.App.Core.Services;
+using VoiceScan.Core.Storage;
 
 namespace VoiceScan.App.Core.ViewModels;
 
@@ -128,10 +130,14 @@ public sealed class ReviewViewModel : INotifyPropertyChanged
         StatusMessage = "Recording confirmation in SQLite...";
 
         var item = _selectedItem;
+        string fileHash = !string.IsNullOrEmpty(item.Segment.FileHash)
+            ? item.Segment.FileHash
+            : FastFileHasher.ComputeFastHash(item.Segment.FilePath);
+
         var decisionRecord = new ReviewDecisionRecord(
             SegmentId: item.Segment.SegmentId,
             FilePath: item.Segment.FilePath,
-            FileHash: "hash-" + Path.GetFileName(item.Segment.FilePath),
+            FileHash: fileHash,
             ProfileName: item.ProfileName,
             StartTimeSeconds: item.Segment.StartTimeSeconds,
             EndTimeSeconds: item.Segment.EndTimeSeconds,
@@ -140,7 +146,8 @@ public sealed class ReviewViewModel : INotifyPropertyChanged
             ReasonFlags: item.Segment.ReasonFlags,
             Decision: ReviewDecision.Confirmed,
             DecidedAtUtc: DateTimeOffset.UtcNow,
-            Notes: _reviewerNotes);
+            Notes: _reviewerNotes,
+            SegmentEmbedding: item.Segment.SegmentEmbedding);
 
         try
         {
@@ -175,10 +182,14 @@ public sealed class ReviewViewModel : INotifyPropertyChanged
         StatusMessage = "Recording rejection and saving negative cohort in SQLite...";
 
         var item = _selectedItem;
+        string fileHash = !string.IsNullOrEmpty(item.Segment.FileHash)
+            ? item.Segment.FileHash
+            : FastFileHasher.ComputeFastHash(item.Segment.FilePath);
+
         var decisionRecord = new ReviewDecisionRecord(
             SegmentId: item.Segment.SegmentId,
             FilePath: item.Segment.FilePath,
-            FileHash: "hash-" + Path.GetFileName(item.Segment.FilePath),
+            FileHash: fileHash,
             ProfileName: item.ProfileName,
             StartTimeSeconds: item.Segment.StartTimeSeconds,
             EndTimeSeconds: item.Segment.EndTimeSeconds,
@@ -187,7 +198,8 @@ public sealed class ReviewViewModel : INotifyPropertyChanged
             ReasonFlags: item.Segment.ReasonFlags,
             Decision: ReviewDecision.Rejected,
             DecidedAtUtc: DateTimeOffset.UtcNow,
-            Notes: _reviewerNotes);
+            Notes: _reviewerNotes,
+            SegmentEmbedding: item.Segment.SegmentEmbedding);
 
         try
         {

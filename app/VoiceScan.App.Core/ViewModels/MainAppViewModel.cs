@@ -111,7 +111,7 @@ public sealed class MainAppViewModel : INotifyPropertyChanged
 
     private ReportExportSettings BuildExportSettings()
     {
-        string modelId = "wespeaker-resnet34";
+        string modelId = "speechbrain-ecapa-tdnn";
         try
         {
             if (Scan.SelectedProfilePath is { } path) modelId = VoiceProfile.LoadFromFile(path).ModelId;

@@ -35,20 +35,39 @@ public sealed class VoiceScanDatabase : IDisposable
         }.ToString();
     }
 
-    public async Task InitializeAsync(CancellationToken cancellationToken = default)
+    private readonly SemaphoreSlim _initLock = new(1, 1);
+    private bool _initialized;
+
+    public async Task EnsureInitializedAsync(CancellationToken cancellationToken = default)
     {
-        using var connection = new SqliteConnection(_connectionString);
-        await connection.OpenAsync(cancellationToken);
+        if (_initialized) return;
 
-        using (var pragmaCmd = connection.CreateCommand())
+        await _initLock.WaitAsync(cancellationToken);
+        try
         {
-            pragmaCmd.CommandText = "PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;";
-            await pragmaCmd.ExecuteNonQueryAsync(cancellationToken);
-        }
+            if (_initialized) return;
 
-        // Apply migrations
-        await ApplyMigrationsAsync(connection, cancellationToken);
+            using var connection = new SqliteConnection(_connectionString);
+            await connection.OpenAsync(cancellationToken);
+
+            using (var pragmaCmd = connection.CreateCommand())
+            {
+                pragmaCmd.CommandText = "PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;";
+                await pragmaCmd.ExecuteNonQueryAsync(cancellationToken);
+            }
+
+            // Apply migrations
+            await ApplyMigrationsAsync(connection, cancellationToken);
+            _initialized = true;
+        }
+        finally
+        {
+            _initLock.Release();
+        }
     }
+
+    public Task InitializeAsync(CancellationToken cancellationToken = default) =>
+        EnsureInitializedAsync(cancellationToken);
 
     private static async Task ApplyMigrationsAsync(SqliteConnection connection, CancellationToken cancellationToken)
     {
@@ -179,6 +198,7 @@ public sealed class VoiceScanDatabase : IDisposable
 
     public async Task SaveProfileAsync(VoiceProfile profile, CancellationToken cancellationToken = default)
     {
+        await EnsureInitializedAsync(cancellationToken);
         using var connection = new SqliteConnection(_connectionString);
         await connection.OpenAsync(cancellationToken);
 
@@ -212,6 +232,7 @@ public sealed class VoiceScanDatabase : IDisposable
 
     public async Task<VoiceProfile?> GetProfileAsync(string profileName, CancellationToken cancellationToken = default)
     {
+        await EnsureInitializedAsync(cancellationToken);
         using var connection = new SqliteConnection(_connectionString);
         await connection.OpenAsync(cancellationToken);
 
@@ -250,6 +271,7 @@ public sealed class VoiceScanDatabase : IDisposable
 
     public async Task<IReadOnlyList<StoredProfileInfo>> ListProfilesAsync(CancellationToken cancellationToken = default)
     {
+        await EnsureInitializedAsync(cancellationToken);
         using var connection = new SqliteConnection(_connectionString);
         await connection.OpenAsync(cancellationToken);
 
@@ -273,6 +295,7 @@ public sealed class VoiceScanDatabase : IDisposable
 
     public async Task<bool> DeleteProfileAsync(string profileName, CancellationToken cancellationToken = default)
     {
+        await EnsureInitializedAsync(cancellationToken);
         using var connection = new SqliteConnection(_connectionString);
         await connection.OpenAsync(cancellationToken);
 
@@ -290,6 +313,7 @@ public sealed class VoiceScanDatabase : IDisposable
 
     public async Task<IReadOnlyList<CachedWindow>?> GetCachedWindowsAsync(string cacheKey, CancellationToken cancellationToken = default)
     {
+        await EnsureInitializedAsync(cancellationToken);
         using var connection = new SqliteConnection(_connectionString);
         await connection.OpenAsync(cancellationToken);
 
@@ -343,6 +367,7 @@ public sealed class VoiceScanDatabase : IDisposable
         IReadOnlyList<CachedWindow> windows,
         CancellationToken cancellationToken = default)
     {
+        await EnsureInitializedAsync(cancellationToken);
         using var connection = new SqliteConnection(_connectionString);
         await connection.OpenAsync(cancellationToken);
 
@@ -423,6 +448,7 @@ public sealed class VoiceScanDatabase : IDisposable
         string? fileHash = null,
         CancellationToken cancellationToken = default)
     {
+        await EnsureInitializedAsync(cancellationToken);
         using var connection = new SqliteConnection(_connectionString);
         await connection.OpenAsync(cancellationToken);
 
@@ -453,6 +479,7 @@ public sealed class VoiceScanDatabase : IDisposable
 
     public async Task<CacheStats> GetCacheStatsAsync(CancellationToken cancellationToken = default)
     {
+        await EnsureInitializedAsync(cancellationToken);
         using var connection = new SqliteConnection(_connectionString);
         await connection.OpenAsync(cancellationToken);
 
@@ -496,6 +523,7 @@ public sealed class VoiceScanDatabase : IDisposable
         string segmentsJson,
         CancellationToken cancellationToken = default)
     {
+        await EnsureInitializedAsync(cancellationToken);
         using var connection = new SqliteConnection(_connectionString);
         await connection.OpenAsync(cancellationToken);
 
@@ -539,6 +567,7 @@ public sealed class VoiceScanDatabase : IDisposable
 
     public void Dispose()
     {
+        _initLock.Dispose();
         SqliteConnection.ClearAllPools();
     }
 }

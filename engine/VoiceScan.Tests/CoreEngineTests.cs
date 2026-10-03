@@ -197,11 +197,11 @@ public class CoreEngineTests
     }
 
     [Fact]
-    public void OnnxEmbeddingModel_WeSpeakerAndCamPlus_ProduceUnitNormVectors()
+    public void OnnxEmbeddingModel_EcapaAndTitaNet_ProduceUnitNormVectors()
     {
         var root = FindRepoRoot();
-        var wePath = Path.Combine(root, "models", "wespeaker_en_voxceleb_resnet34.onnx");
-        var camPath = Path.Combine(root, "models", "3dspeaker_speech_campplus_sv_zh_en_16k-common_advanced.onnx");
+        var ecapaPath = Path.Combine(root, "models", "ecapa_tdnn.onnx");
+        var titanetPath = Path.Combine(root, "models", "titanet_small.onnx");
 
         float[] testAudio = new float[32000];
         for (int i = 0; i < testAudio.Length; i++)
@@ -209,26 +209,26 @@ public class CoreEngineTests
             testAudio[i] = 0.5f * MathF.Sin(2f * MathF.PI * 300f * i / 16000);
         }
 
-        // 1. Test WeSpeaker
-        using (var weModel = new OnnxEmbeddingModel(wePath))
+        // 1. Test SpeechBrain ECAPA-TDNN
+        using (var ecapaModel = new OnnxEmbeddingModel(ecapaPath))
         {
-            Assert.Equal("wespeaker-resnet34", weModel.ModelId);
-            Assert.Equal(256, weModel.EmbeddingDimension);
+            Assert.Equal("speechbrain-ecapa-tdnn", ecapaModel.ModelId);
+            Assert.Equal(192, ecapaModel.EmbeddingDimension);
 
-            var emb = weModel.ExtractEmbedding(testAudio);
-            Assert.Equal(256, emb.Length);
+            var emb = ecapaModel.ExtractEmbedding(testAudio);
+            Assert.Equal(192, emb.Length);
 
             float norm = MathF.Sqrt(emb.Sum(x => x * x));
             Assert.True(MathF.Abs(norm - 1.0f) < 1e-4f, $"Expected unit norm, got {norm}");
         }
 
-        // 2. Test CAM++
-        using (var camModel = new OnnxEmbeddingModel(camPath))
+        // 2. Test NVIDIA NeMo TitaNet
+        using (var titanetModel = new OnnxEmbeddingModel(titanetPath))
         {
-            Assert.Equal("3dspeaker-campplus", camModel.ModelId);
-            Assert.Equal(192, camModel.EmbeddingDimension);
+            Assert.Equal("nvidia-titanet-small", titanetModel.ModelId);
+            Assert.Equal(192, titanetModel.EmbeddingDimension);
 
-            var emb = camModel.ExtractEmbedding(testAudio);
+            var emb = titanetModel.ExtractEmbedding(testAudio);
             Assert.Equal(192, emb.Length);
 
             float norm = MathF.Sqrt(emb.Sum(x => x * x));
@@ -244,15 +244,15 @@ public class CoreEngineTests
         var clips = Directory.GetFiles(enrollDir, "*.wav");
         Assert.NotEmpty(clips);
 
-        using var embeddingModel = new OnnxEmbeddingModel("wespeaker");
+        using var embeddingModel = new OnnxEmbeddingModel("ecapa");
         using var vad = new SileroVad();
 
         var service = new ProfileEnrollmentService(embeddingModel, vad);
         var profile = await service.EnrollProfileAsync(clips, "speaker_charlie");
 
         Assert.Equal("speaker_charlie", profile.ProfileName);
-        Assert.Equal("wespeaker-resnet34", profile.ModelId);
-        Assert.Equal(256, profile.Centroid.Length);
+        Assert.Equal("speechbrain-ecapa-tdnn", profile.ModelId);
+        Assert.Equal(192, profile.Centroid.Length);
         Assert.True(profile.EnrollmentEmbeddings.Count >= 2);
 
         // Verify centroid is unit normalized
@@ -309,7 +309,7 @@ public class CoreEngineTests
         var enrollDir = Path.Combine(root, "eval", "dev_dataset", "enrollment", "speaker_charlie");
         var clips = Directory.GetFiles(enrollDir, "*.wav");
 
-        using var embeddingModel = new OnnxEmbeddingModel("wespeaker");
+        using var embeddingModel = new OnnxEmbeddingModel("ecapa");
         using var vad = new SileroVad();
 
         var service = new ProfileEnrollmentService(embeddingModel, vad);

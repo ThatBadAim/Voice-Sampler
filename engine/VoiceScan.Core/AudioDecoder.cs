@@ -62,8 +62,10 @@ public static class AudioDecoder
             }
 
             var outputTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
+            var errTask = process.StandardError.ReadToEndAsync(cancellationToken);
             await process.WaitForExitAsync(cancellationToken);
             var json = await outputTask;
+            await errTask;
 
             if (process.ExitCode != 0 || string.IsNullOrWhiteSpace(json))
             {
@@ -132,8 +134,10 @@ public static class AudioDecoder
             if (process == null) return 0.0;
 
             var outputTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
+            var errTask = process.StandardError.ReadToEndAsync(cancellationToken);
             await process.WaitForExitAsync(cancellationToken);
             string output = (await outputTask).Trim();
+            await errTask;
 
             if (double.TryParse(output, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out double duration))
             {
@@ -189,10 +193,26 @@ public static class AudioDecoder
         // Producer task: reads raw stdout and pushes chunks into bounded channel
         _ = Task.Run(async () =>
         {
+            Task? stderrDrainTask = null;
             try
             {
                 using (process)
                 {
+                    // Asynchronously drain stderr to prevent pipe buffer exhaustion and deadlock
+                    stderrDrainTask = Task.Run(async () =>
+                    {
+                        try
+                        {
+                            using var reader = process.StandardError;
+                            char[] buf = new char[1024];
+                            while (await reader.ReadAsync(buf.AsMemory(), linkedCts.Token) > 0) { }
+                        }
+                        catch
+                        {
+                            // Drain until process exits or is killed
+                        }
+                    });
+
                     var stream = process.StandardOutput.BaseStream;
                     byte[] byteBuffer = new byte[chunkSize * sizeof(float)];
                     long totalSamplesRead = 0;
@@ -215,6 +235,7 @@ public static class AudioDecoder
                     }
 
                     await process.WaitForExitAsync(linkedCts.Token);
+                    if (stderrDrainTask != null) await stderrDrainTask;
                     channel.Writer.Complete();
                 }
             }
@@ -298,10 +319,11 @@ public static class AudioDecoder
         };
 
         using var process = Process.Start(startInfo) ?? throw new InvalidOperationException($"Failed to launch FFmpeg for extraction: {outputWavPath}");
+        var stderrTask = process.StandardError.ReadToEndAsync(cancellationToken);
         await process.WaitForExitAsync(cancellationToken);
+        string err = await stderrTask;
         if (process.ExitCode != 0)
         {
-            string err = await process.StandardError.ReadToEndAsync(cancellationToken);
             throw new InvalidOperationException($"FFmpeg extraction failed ({process.ExitCode}): {err}");
         }
     }

@@ -35,7 +35,6 @@ public static class GpuModelSample
 
         try
         {
-            // Attempt enabling CUDA execution provider
             options.AppendExecutionProvider_CUDA(deviceId);
             using (var testSession = new InferenceSession(modelPath, options))
             {
@@ -51,7 +50,6 @@ public static class GpuModelSample
             Console.WriteLine("[INFO] Falling back cleanly to CPUExecutionProvider.");
         }
 
-        // Recreate clean options with fallback if CUDA failed
         using var runOptions = new SessionOptions();
         if (cudaActive)
         {
@@ -64,28 +62,8 @@ public static class GpuModelSample
 
         Console.WriteLine($"=== Model Loaded: {modelName} ===");
         Console.WriteLine($"Active Provider: {activeProvider} (CUDA Active: {cudaActive})");
-        Console.WriteLine("Inputs:");
-        foreach (var (name, meta) in session.InputMetadata)
-        {
-            Console.WriteLine($"  - {name}: Type={meta.ElementType}, Dims=[{string.Join(",", meta.Dimensions)}]");
-        }
-        Console.WriteLine("Outputs:");
-        foreach (var (name, meta) in session.OutputMetadata)
-        {
-            Console.WriteLine($"  - {name}: Type={meta.ElementType}, Dims=[{string.Join(",", meta.Dimensions)}]");
-        }
 
-        string outputSummary;
-
-        // Perform test forward pass based on model architecture
-        if (modelName.Contains("silero_vad", StringComparison.OrdinalIgnoreCase))
-        {
-            outputSummary = RunSileroVadForwardPass(session);
-        }
-        else
-        {
-            outputSummary = RunEmbeddingForwardPass(session);
-        }
+        string outputSummary = RunEmbeddingForwardPass(session, modelName);
 
         Console.WriteLine($"Execution output verification: {outputSummary}");
         return new ModelVerificationResult(
@@ -99,37 +77,32 @@ public static class GpuModelSample
             outputSummary);
     }
 
-    private static string RunSileroVadForwardPass(InferenceSession session)
+    private static string RunEmbeddingForwardPass(InferenceSession session, string modelName)
     {
-        // Silero VAD v5 inputs: input [1, 512], state [2, 1, 128], sr []
-        var inputTensor = new DenseTensor<float>(new float[512], [1, 512]);
-        var stateTensor = new DenseTensor<float>(new float[2 * 1 * 128], [2, 1, 128]);
-        var srTensor = new DenseTensor<long>(new long[] { 16000 }, Array.Empty<int>());
+        bool isTitaNet = modelName.Contains("titanet", StringComparison.OrdinalIgnoreCase);
+        IReadOnlyCollection<NamedOnnxValue> inputs;
 
-        var inputs = new[]
+        if (isTitaNet)
         {
-            NamedOnnxValue.CreateFromTensor("input", inputTensor),
-            NamedOnnxValue.CreateFromTensor("state", stateTensor),
-            NamedOnnxValue.CreateFromTensor("sr", srTensor)
-        };
+            // TitaNet input: audio_signal [1, 80, 100], length [1]
+            var signal = new DenseTensor<float>(new float[1 * 80 * 100], [1, 80, 100]);
+            var length = new DenseTensor<long>(new long[] { 100 }, [1]);
+            inputs = new[]
+            {
+                NamedOnnxValue.CreateFromTensor("audio_signal", signal),
+                NamedOnnxValue.CreateFromTensor("length", length)
+            };
+        }
+        else
+        {
+            // ECAPA-TDNN input: features [1, 100, 80]
+            var inputName = session.InputMetadata.First().Key;
+            var tensor = new DenseTensor<float>(new float[1 * 100 * 80], [1, 100, 80]);
+            inputs = new[] { NamedOnnxValue.CreateFromTensor(inputName, tensor) };
+        }
 
         using var results = session.Run(inputs);
-        var output = results.First(r => r.Name == "output").AsTensor<float>();
-        var speechProb = output.GetValue(0);
-        return $"Silero VAD forward pass executed. Speech probability: {speechProb:F4}";
-    }
-
-    private static string RunEmbeddingForwardPass(InferenceSession session)
-    {
-        // 80-dim log-mel filterbanks over 100 frames [1, 100, 80]
-        var inputMeta = session.InputMetadata.First();
-        var inputName = inputMeta.Key;
-        var dummyFeatures = new float[1 * 100 * 80];
-        var tensor = new DenseTensor<float>(dummyFeatures, [1, 100, 80]);
-
-        var inputs = new[] { NamedOnnxValue.CreateFromTensor(inputName, tensor) };
-        using var results = session.Run(inputs);
-        var output = results.First().AsTensor<float>();
+        var output = results.First(r => r.Name.Contains("emb", StringComparison.OrdinalIgnoreCase) || results.Count == 1).AsTensor<float>();
         var dimensions = string.Join("x", output.Dimensions.ToArray());
         var sampleValue = output.GetValue(0);
         return $"Speaker embedding forward pass executed. Output shape: [{dimensions}], first element: {sampleValue:F4}";
@@ -139,11 +112,11 @@ public static class GpuModelSample
     {
         var candidates = new[]
         {
-            Path.Combine(AppContext.BaseDirectory, "models", "silero_vad.onnx"),
-            Path.Combine(Directory.GetCurrentDirectory(), "models", "silero_vad.onnx"),
-            Path.Combine(Directory.GetCurrentDirectory(), "models", "wespeaker_en_voxceleb_resnet34.onnx"),
-            Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "models", "silero_vad.onnx"),
-            Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "models", "wespeaker_en_voxceleb_resnet34.onnx")
+            Path.Combine(AppContext.BaseDirectory, "models", "ecapa_tdnn.onnx"),
+            Path.Combine(Directory.GetCurrentDirectory(), "models", "ecapa_tdnn.onnx"),
+            Path.Combine(Directory.GetCurrentDirectory(), "models", "titanet_small.onnx"),
+            Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "models", "ecapa_tdnn.onnx"),
+            Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "models", "titanet_small.onnx")
         };
 
         foreach (var path in candidates)
@@ -155,6 +128,6 @@ public static class GpuModelSample
             }
         }
 
-        return Path.GetFullPath("models/silero_vad.onnx");
+        return Path.GetFullPath("models/ecapa_tdnn.onnx");
     }
 }

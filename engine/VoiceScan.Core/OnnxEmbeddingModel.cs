@@ -8,7 +8,8 @@ using Microsoft.ML.OnnxRuntime;
 using Microsoft.ML.OnnxRuntime.Tensors;
 
 /// <summary>
-/// ONNX Runtime implementation of ISpeakerEmbeddingModel with CUDA support and batched tensor execution.
+/// ONNX Runtime implementation of ISpeakerEmbeddingModel supporting European (SpeechBrain ECAPA-TDNN)
+/// and American (NVIDIA NeMo TitaNet) models with CUDA acceleration and batched tensor execution.
 /// </summary>
 public sealed class OnnxEmbeddingModel : ISpeakerEmbeddingModel
 {
@@ -17,6 +18,8 @@ public sealed class OnnxEmbeddingModel : ISpeakerEmbeddingModel
 
     private readonly InferenceSession _session;
     private readonly string _inputName;
+    private readonly string _outputName;
+    private readonly bool _isTitaNet;
     private readonly FbankProfile _fbankProfile;
 
     public string ModelId { get; }
@@ -24,7 +27,7 @@ public sealed class OnnxEmbeddingModel : ISpeakerEmbeddingModel
     public string ActiveProvider { get; }
     public bool IsCudaActive { get; }
 
-    public OnnxEmbeddingModel(string modelTypeOrPath = "wespeaker", int deviceId = 0)
+    public OnnxEmbeddingModel(string modelTypeOrPath = "ecapa", int deviceId = 0)
     {
         string modelPath = ResolveModelPath(modelTypeOrPath);
         if (!File.Exists(modelPath))
@@ -33,21 +36,25 @@ public sealed class OnnxEmbeddingModel : ISpeakerEmbeddingModel
         }
 
         string fileName = Path.GetFileName(modelPath);
-        if (fileName.Contains("campplus", StringComparison.OrdinalIgnoreCase))
+        if (fileName.Contains("titanet", StringComparison.OrdinalIgnoreCase))
         {
-            ModelId = "3dspeaker-campplus";
-            _fbankProfile = FbankProfile.CamPlusPlus;
+            ModelId = "nvidia-titanet-small";
+            _fbankProfile = FbankProfile.WeSpeaker;
             EmbeddingDimension = 192;
+            _isTitaNet = true;
         }
-        else if (fileName.Contains("wespeaker", StringComparison.OrdinalIgnoreCase))
+        else if (fileName.Contains("ecapa", StringComparison.OrdinalIgnoreCase))
         {
-            ModelId = "wespeaker-resnet34";
-            EmbeddingDimension = 256;
+            ModelId = "speechbrain-ecapa-tdnn";
+            _fbankProfile = FbankProfile.WeSpeaker;
+            EmbeddingDimension = 192;
+            _isTitaNet = false;
         }
         else
         {
             ModelId = Path.GetFileNameWithoutExtension(modelPath);
-            EmbeddingDimension = 256;
+            EmbeddingDimension = 192;
+            _isTitaNet = fileName.Contains("titanet", StringComparison.OrdinalIgnoreCase);
         }
 
         using var options = new SessionOptions();
@@ -75,6 +82,8 @@ public sealed class OnnxEmbeddingModel : ISpeakerEmbeddingModel
         ActiveProvider = provider;
         IsCudaActive = cudaActive;
         _inputName = _session.InputMetadata.Keys.First();
+        _outputName = _session.OutputMetadata.Keys.FirstOrDefault(k => k.Contains("emb", StringComparison.OrdinalIgnoreCase)) 
+                      ?? _session.OutputMetadata.Keys.First();
     }
 
     public float[] ExtractEmbedding(float[] audioWindow)
@@ -108,26 +117,60 @@ public sealed class OnnxEmbeddingModel : ISpeakerEmbeddingModel
             return Enumerable.Range(0, batchSize).Select(_ => new float[EmbeddingDimension]).ToArray();
         }
 
-        // Create dense batch tensor: [batchSize, maxFrames, 80]
-        var tensorData = new float[batchSize * maxFrames * 80];
-        for (int b = 0; b < batchSize; b++)
+        IReadOnlyCollection<NamedOnnxValue> inputs;
+
+        if (_isTitaNet)
         {
-            int frames = fbanks[b].GetLength(0);
-            for (int t = 0; t < frames; t++)
+            // TitaNet expects [batch, 80, frames] and length [batch]
+            var tensorData = new float[batchSize * 80 * maxFrames];
+            for (int b = 0; b < batchSize; b++)
             {
-                int baseIdx = ((b * maxFrames) + t) * 80;
+                int frames = fbanks[b].GetLength(0);
                 for (int m = 0; m < 80; m++)
                 {
-                    tensorData[baseIdx + m] = fbanks[b][t, m];
+                    for (int t = 0; t < frames; t++)
+                    {
+                        int idx = (b * 80 * maxFrames) + (m * maxFrames) + t;
+                        tensorData[idx] = fbanks[b][t, m];
+                    }
                 }
             }
+
+            var lengths = new long[batchSize];
+            for (int b = 0; b < batchSize; b++) lengths[b] = fbanks[b].GetLength(0);
+
+            var signalTensor = new DenseTensor<float>(tensorData, [batchSize, 80, maxFrames]);
+            var lengthTensor = new DenseTensor<long>(lengths, [batchSize]);
+
+            inputs = new[]
+            {
+                NamedOnnxValue.CreateFromTensor("audio_signal", signalTensor),
+                NamedOnnxValue.CreateFromTensor("length", lengthTensor)
+            };
+        }
+        else
+        {
+            // ECAPA-TDNN expects [batch, frames, 80]
+            var tensorData = new float[batchSize * maxFrames * 80];
+            for (int b = 0; b < batchSize; b++)
+            {
+                int frames = fbanks[b].GetLength(0);
+                for (int t = 0; t < frames; t++)
+                {
+                    int baseIdx = ((b * maxFrames) + t) * 80;
+                    for (int m = 0; m < 80; m++)
+                    {
+                        tensorData[baseIdx + m] = fbanks[b][t, m];
+                    }
+                }
+            }
+
+            var inputTensor = new DenseTensor<float>(tensorData, [batchSize, maxFrames, 80]);
+            inputs = new[] { NamedOnnxValue.CreateFromTensor(_inputName, inputTensor) };
         }
 
-        var inputTensor = new DenseTensor<float>(tensorData, [batchSize, maxFrames, 80]);
-        var inputs = new[] { NamedOnnxValue.CreateFromTensor(_inputName, inputTensor) };
-
         using var results = _session.Run(inputs);
-        var outputTensor = results.First().AsTensor<float>();
+        var outputTensor = results.First(r => r.Name == _outputName).AsTensor<float>();
 
         int embDim = outputTensor.Dimensions[^1];
         float[][] embeddings = new float[batchSize][];
@@ -166,9 +209,8 @@ public sealed class OnnxEmbeddingModel : ISpeakerEmbeddingModel
 
         string targetFileName = modelTypeOrPath.ToLowerInvariant() switch
         {
-            "campplus" or "3dspeaker" or "3dspeaker-campplus" =>
-                "3dspeaker_speech_campplus_sv_zh_en_16k-common_advanced.onnx",
-            _ => "wespeaker_en_voxceleb_resnet34.onnx"
+            "titanet" or "titanet-small" or "nvidia" or "nvidia-titanet-small" => "titanet_small.onnx",
+            _ => "ecapa_tdnn.onnx"
         };
 
         return AppPaths.FindModel(targetFileName) ?? Path.GetFullPath(Path.Combine("models", targetFileName));

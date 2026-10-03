@@ -55,10 +55,10 @@ public static class Program
     {
         Console.WriteLine("VoiceScan CLI — Local Offline Voice Enrollment, Media Scanner & Embedding Cache");
         Console.WriteLine("Usage:");
-        Console.WriteLine("  VoiceScan.Cli enroll --audio <files...> --name <profile_name> [--output <profile.json>] [--model <wespeaker|campplus>] [--db <path>]");
+        Console.WriteLine("  VoiceScan.Cli enroll --audio <files...> --name <profile_name> [--output <profile.json>] [--model <ecapa|titanet>] [--db <path>]");
         Console.WriteLine("  VoiceScan.Cli scan --input <folder_or_file> --profile <profile.json_or_name> --output <results.json> [--export <report_dir>] [--cohort <cohort.json>] [--threshold <val>] [--smooth-radius <n>] [--model <model_id>] [--track <index>] [--db <path>] [--no-cache]");
         Console.WriteLine("  VoiceScan.Cli report export --results <results.json> --output <dir> [--profile <name>]");
-        Console.WriteLine("  VoiceScan.Cli cohort build --audio <files_or_folders...> --output <cohort.json> [--model <wespeaker|campplus>]");
+        Console.WriteLine("  VoiceScan.Cli cohort build --audio <files_or_folders...> --output <cohort.json> [--model <ecapa|titanet>]");
         Console.WriteLine("  VoiceScan.Cli profiles list [--db <path>]");
         Console.WriteLine("  VoiceScan.Cli profiles delete --name <profile_name> [--db <path>]");
         Console.WriteLine("  VoiceScan.Cli cache stats [--db <path>]");
@@ -71,7 +71,7 @@ public static class Program
         var audioPaths = new List<string>();
         string profileName = string.Empty;
         string? outputPath = null;
-        string modelName = "wespeaker";
+        string modelName = "ecapa";
         string? dbPath = null;
         bool multiCondition = false;
 
@@ -154,7 +154,7 @@ public static class Program
         string? profileArg = null;
         string? outputPath = null;
         double? thresholdArg = null;
-        string modelName = "wespeaker";
+        string modelName = "ecapa";
         int trackIndex = 0;
         string? dbPath = null;
         bool noCache = false;
@@ -357,7 +357,7 @@ public static class Program
             var fileResults = document.Files.Select(f => new FileVerdictResult(
                 FilePath: f.FilePath,
                 FileName: Path.GetFileName(f.FilePath),
-                FileHash: f.ClipId,
+                FileHash: !string.IsNullOrEmpty(f.FileHash) ? f.FileHash : f.ClipId,
                 DurationSeconds: f.DurationSeconds,
                 OverallVerdict: f.Verdict,
                 MaxConfidence: f.MaxConfidence,
@@ -369,7 +369,9 @@ public static class Program
                     DurationSeconds: s.EndTimeSeconds - s.StartTimeSeconds,
                     Verdict: s.Verdict,
                     Confidence: s.Confidence,
-                    ReasonFlags: s.ReasonFlags)).ToList())).ToList();
+                    ReasonFlags: s.ReasonFlags,
+                    SegmentEmbedding: s.Embedding,
+                    FileHash: f.FileHash)).ToList())).ToList();
 
             var exportResult = await exporter.ExportReportAsync(fileResults, exportSettings, exportDir);
             Console.WriteLine($"[EXPORT] Evidence report generated in: {exportDir}");
@@ -597,7 +599,7 @@ public static class Program
         if (args.Length == 0 || args[0] is "-h" or "--help")
         {
             Console.WriteLine("Cohort Management:");
-            Console.WriteLine("  VoiceScan.Cli cohort build --audio <paths...> --output <cohort.json> [--model <wespeaker|campplus>]");
+            Console.WriteLine("  VoiceScan.Cli cohort build --audio <paths...> --output <cohort.json> [--model <ecapa|titanet>]");
             return 0;
         }
 
@@ -610,7 +612,7 @@ public static class Program
 
         var audioPaths = new List<string>();
         string? outputPath = null;
-        string modelName = "wespeaker";
+        string modelName = "ecapa";
 
         for (int i = 1; i < args.Length; i++)
         {
@@ -751,7 +753,7 @@ public static class Program
         var exporter = new EvidenceReportExporter();
         var exportSettings = new ReportExportSettings(
             ProfileName: doc.ScanMetadata.ProfileName ?? profileName,
-            ModelId: doc.ScanMetadata.ModelId ?? "wespeaker-resnet34",
+            ModelId: doc.ScanMetadata.ModelId ?? "speechbrain-ecapa-tdnn",
             EngineVersion: doc.ScanMetadata.EngineVersion ?? "0.1.0",
             Threshold: doc.ScanMetadata.Threshold,
             ClusterThreshold: 0.40,
@@ -761,7 +763,7 @@ public static class Program
         var fileResults = doc.Files.Select(f => new FileVerdictResult(
             FilePath: f.FilePath,
             FileName: Path.GetFileName(f.FilePath),
-            FileHash: f.ClipId,
+            FileHash: !string.IsNullOrEmpty(f.FileHash) ? f.FileHash : f.ClipId,
             DurationSeconds: f.DurationSeconds,
             OverallVerdict: f.Verdict,
             MaxConfidence: f.MaxConfidence,
@@ -773,7 +775,9 @@ public static class Program
                 DurationSeconds: s.EndTimeSeconds - s.StartTimeSeconds,
                 Verdict: s.Verdict,
                 Confidence: s.Confidence,
-                ReasonFlags: s.ReasonFlags)).ToList())).ToList();
+                ReasonFlags: s.ReasonFlags,
+                SegmentEmbedding: s.Embedding,
+                FileHash: f.FileHash)).ToList())).ToList();
 
         var exportResult = await exporter.ExportReportAsync(fileResults, exportSettings, outputDir);
         Console.WriteLine($"[EXPORT] Evidence report successfully generated in: {outputDir}");

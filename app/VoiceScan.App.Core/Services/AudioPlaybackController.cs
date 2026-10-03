@@ -102,6 +102,7 @@ public sealed class AudioPlaybackController : IAudioPlaybackController
             wasPlaying = _isPlaying;
             if (wasPlaying) StopSession();
             _positionAtStart = Math.Clamp(positionSeconds, 0.0, _totalDurationSeconds);
+            _stopAtPositionSeconds = null;
             if (wasPlaying) StartSession();
         }
         PositionChanged?.Invoke(this, _positionAtStart);

@@ -19,33 +19,33 @@ public class GpuModelSampleTests
     }
 
     [Fact]
-    public void LoadAndRunSample_LoadsSileroVadSuccessfully()
+    public void LoadAndRunSample_LoadsEcapaTdnnSuccessfully()
     {
         var root = FindRepoRoot();
-        var modelPath = Path.Combine(root, "models", "silero_vad.onnx");
+        var modelPath = Path.Combine(root, "models", "ecapa_tdnn.onnx");
         Assert.True(File.Exists(modelPath), $"Model missing at {modelPath}");
 
         var result = GpuModelSample.LoadAndRunSample(modelPath);
 
-        Assert.Equal("silero_vad.onnx", result.ModelName);
-        Assert.True(result.InputCount >= 3);
+        Assert.Equal("ecapa_tdnn.onnx", result.ModelName);
+        Assert.True(result.InputCount >= 1);
         Assert.True(result.OutputCount >= 1);
-        Assert.Contains("forward pass executed", result.OutputSummary);
+        Assert.Contains("Speaker embedding forward pass executed", result.OutputSummary);
     }
 
     [Fact]
-    public void LoadAndRunSample_LoadsWeSpeakerResNet34Successfully()
+    public void LoadAndRunSample_LoadsTitaNetSuccessfully()
     {
         var root = FindRepoRoot();
-        var modelPath = Path.Combine(root, "models", "wespeaker_en_voxceleb_resnet34.onnx");
+        var modelPath = Path.Combine(root, "models", "titanet_small.onnx");
         Assert.True(File.Exists(modelPath), $"Model missing at {modelPath}");
 
         var result = GpuModelSample.LoadAndRunSample(modelPath);
 
-        Assert.Equal("wespeaker_en_voxceleb_resnet34.onnx", result.ModelName);
-        Assert.Equal(1, result.InputCount);
-        Assert.Equal(1, result.OutputCount);
-        Assert.Contains("[1x256]", result.OutputSummary);
+        Assert.Equal("titanet_small.onnx", result.ModelName);
+        Assert.True(result.InputCount >= 1);
+        Assert.True(result.OutputCount >= 1);
+        Assert.Contains("Speaker embedding forward pass executed", result.OutputSummary);
     }
 
     [Fact]

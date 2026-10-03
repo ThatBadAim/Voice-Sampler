@@ -10,8 +10,7 @@ public static class SetupCheck
 {
     public static readonly string[] RequiredModelFiles =
     [
-        "silero_vad.onnx",
-        "wespeaker_en_voxceleb_resnet34.onnx"
+        "ecapa_tdnn.onnx"
     ];
 
     public static readonly string[] RequiredTools = ["ffmpeg", "ffprobe", "ffplay"];

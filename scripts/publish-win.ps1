@@ -23,7 +23,7 @@ dotnet publish $Project `
 Write-Host "==> Bundling models..."
 $DestModels = Join-Path $OutputDir "models"
 New-Item -ItemType Directory -Force -Path $DestModels | Out-Null
-foreach ($Model in @("silero_vad.onnx", "wespeaker_en_voxceleb_resnet34.onnx")) {
+foreach ($Model in @("ecapa_tdnn.onnx", "titanet_small.onnx")) {
     $Source = Join-Path $RootDir "models\$Model"
     if (-not (Test-Path $Source)) {
         throw "models\$Model is missing. See models\manifest.json for the download link and checksum."

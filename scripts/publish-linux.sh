@@ -20,7 +20,7 @@ dotnet publish "${ROOT_DIR}/app/VoiceScan.Avalonia/VoiceScan.Avalonia.csproj" \
 # Bundle the models; refuse to ship a package that cannot scan.
 echo "==> Bundling models..."
 mkdir -p "${OUTPUT_DIR}/models"
-for model in silero_vad.onnx wespeaker_en_voxceleb_resnet34.onnx; do
+for model in ecapa_tdnn.onnx titanet_small.onnx; do
     if [ ! -f "${ROOT_DIR}/models/${model}" ]; then
         echo "ERROR: models/${model} is missing. See models/manifest.json for the download link and checksum." >&2
         exit 1

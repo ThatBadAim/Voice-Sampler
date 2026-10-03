@@ -85,7 +85,7 @@ public class StorageCacheTests
             var profileA = new VoiceProfile
             {
                 ProfileName = "speaker_alpha_test",
-                ModelId = "wespeaker-resnet34",
+                ModelId = "speechbrain-ecapa-tdnn",
                 Centroid = new float[] { 0.1f, 0.2f, -0.3f, 0.4f },
                 EnrollmentEmbeddings = new List<float[]>
                 {
@@ -111,7 +111,7 @@ public class StorageCacheTests
 
                 Assert.NotNull(loaded);
                 Assert.Equal("speaker_alpha_test", loaded.ProfileName);
-                Assert.Equal("wespeaker-resnet34", loaded.ModelId);
+                Assert.Equal("speechbrain-ecapa-tdnn", loaded.ModelId);
                 Assert.Equal(profileA.Centroid.Length, loaded.Centroid.Length);
                 for (int i = 0; i < profileA.Centroid.Length; i++)
                 {
@@ -146,7 +146,7 @@ public class StorageCacheTests
             await db.InitializeAsync();
 
             string fileHash = "hash-12345";
-            string model = "wespeaker-resnet34";
+            string model = "speechbrain-ecapa-tdnn";
             string vad = "silero-0.5";
             string win = "w2.0_h1.0";
             string cacheKey = VoiceScanDatabase.ComputeCacheKey(fileHash, model, vad, win);
@@ -176,7 +176,7 @@ public class StorageCacheTests
             Assert.Equal(2, stats.TotalCachedWindows);
 
             // 4. Invalidation by model
-            int cleared = await db.InvalidateCacheAsync(modelVersion: "wespeaker-resnet34");
+            int cleared = await db.InvalidateCacheAsync(modelVersion: "speechbrain-ecapa-tdnn");
             Assert.Equal(1, cleared);
 
             var afterClear = await db.GetCachedWindowsAsync(cacheKey);
@@ -237,7 +237,7 @@ public class StorageCacheTests
                 filePaths.Add(path);
             }
 
-            using var embeddingModel = new OnnxEmbeddingModel("wespeaker");
+            using var embeddingModel = new OnnxEmbeddingModel("ecapa");
             using var vad = new SileroVad();
             using var db = new VoiceScanDatabase(tempDb);
             await db.InitializeAsync();
@@ -246,16 +246,16 @@ public class StorageCacheTests
             var profileA = new VoiceProfile
             {
                 ProfileName = "profile_A",
-                ModelId = "wespeaker-resnet34",
-                Centroid = new float[256]
+                ModelId = "speechbrain-ecapa-tdnn",
+                Centroid = new float[192]
             };
             profileA.Centroid[0] = 1.0f;
 
             var profileB = new VoiceProfile
             {
                 ProfileName = "profile_B",
-                ModelId = "wespeaker-resnet34",
-                Centroid = new float[256]
+                ModelId = "speechbrain-ecapa-tdnn",
+                Centroid = new float[192]
             };
             profileB.Centroid[1] = 1.0f;
 

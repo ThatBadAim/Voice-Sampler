@@ -175,7 +175,9 @@ public sealed class BackgroundScanController : IBackgroundScanController
                             DurationSeconds: seg.EndTimeSeconds - seg.StartTimeSeconds,
                             Verdict: seg.Verdict,
                             Confidence: seg.Confidence,
-                            ReasonFlags: seg.ReasonFlags));
+                            ReasonFlags: seg.ReasonFlags,
+                            SegmentEmbedding: seg.Embedding,
+                            FileHash: scanResult.FileHash));
                     }
 
                     if (scanResult.Verdict.Equals("Match", StringComparison.OrdinalIgnoreCase)) matches++;
@@ -187,7 +189,7 @@ public sealed class BackgroundScanController : IBackgroundScanController
                     var fileVerdict = new FileVerdictResult(
                         FilePath: filePath,
                         FileName: fileName,
-                        FileHash: scanResult.ClipId,
+                        FileHash: scanResult.FileHash,
                         DurationSeconds: scanResult.DurationSeconds,
                         OverallVerdict: scanResult.Verdict,
                         MaxConfidence: scanResult.MaxConfidence,

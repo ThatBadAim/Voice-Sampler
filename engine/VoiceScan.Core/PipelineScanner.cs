@@ -64,7 +64,15 @@ public sealed class PipelineScanner
             throw new FileNotFoundException($"Media file to scan not found: {mediaFilePath}");
         }
 
-        string fileHash = string.Empty;
+        if (targetProfile.Centroid.Length != _embeddingModel.EmbeddingDimension)
+        {
+            throw new InvalidOperationException(
+                $"Voice profile '{targetProfile.ProfileName}' has embedding dimension {targetProfile.Centroid.Length}, " +
+                $"which does not match active model '{_embeddingModel.ModelId}' dimension {_embeddingModel.EmbeddingDimension}. " +
+                $"Please re-enroll the profile with the current model.");
+        }
+
+        string fileHash = FastFileHasher.ComputeFastHash(mediaFilePath);
         string vadSettings = SileroVad.SettingsFingerprint;
         string windowSettings = $"w:{windowDurationSec:F1}_h:{hopDurationSec:F1}_trk:{audioTrackIndex}_{SpeechWindowExtractor.Fingerprint}_{Filterbank.Fingerprint}";
         string cacheKey = string.Empty;
@@ -72,7 +80,6 @@ public sealed class PipelineScanner
         // 1. Check SQLite Embedding Cache
         if (_database != null)
         {
-            fileHash = FastFileHasher.ComputeFastHash(mediaFilePath);
             cacheKey = VoiceScanDatabase.ComputeCacheKey(fileHash, _embeddingModel.ModelId, vadSettings, windowSettings);
 
             var cachedWindows = await _database.GetCachedWindowsAsync(cacheKey, cancellationToken);
@@ -99,18 +106,39 @@ public sealed class PipelineScanner
                     normalizer,
                     scoreSmoothingRadius);
 
-                double approxDuration = cachedWindows.Count > 0 ? cachedWindows[^1].EndTimeSeconds : 0.0;
+                double duration = await AudioDecoder.GetMediaDurationSecondsAsync(mediaFilePath, cancellationToken);
+                if (duration <= 0.0 && cachedWindows.Count > 0)
+                {
+                    duration = cachedWindows[^1].EndTimeSeconds;
+                }
 
                 var cachedResult = new FileScanResult
                 {
                     FilePath = Path.GetFullPath(mediaFilePath),
                     ClipId = Path.GetFileName(mediaFilePath),
-                    DurationSeconds = Math.Round(approxDuration, 3),
+                    FileHash = fileHash,
+                    DurationSeconds = Math.Round(duration, 3),
                     AudioTrackIndex = audioTrackIndex,
                     Verdict = cachedVerdict,
                     MaxConfidence = Math.Round(cachedMaxConf, 4),
                     Segments = cachedSegments
                 };
+
+                // Persist scan result to database on cache hit
+                if (!string.IsNullOrEmpty(fileHash))
+                {
+                    string segJson = JsonSerializer.Serialize(cachedSegments);
+                    await _database.SaveScanResultAsync(
+                        cachedResult.FilePath,
+                        fileHash,
+                        targetProfile.ProfileName,
+                        _embeddingModel.ModelId,
+                        threshold,
+                        cachedVerdict,
+                        cachedMaxConf,
+                        segJson,
+                        cancellationToken);
+                }
 
                 return cachedResult;
             }
@@ -222,6 +250,7 @@ public sealed class PipelineScanner
         {
             FilePath = Path.GetFullPath(mediaFilePath),
             ClipId = Path.GetFileName(mediaFilePath),
+            FileHash = fileHash,
             DurationSeconds = Math.Round(durationSeconds, 3),
             AudioTrackIndex = audioTrackIndex,
             Verdict = verdict,
@@ -359,10 +388,28 @@ public sealed class PipelineScanner
         {
             double duration = seg.EndTimeSeconds - seg.StartTimeSeconds;
 
-            // Diagnostics come from the windows covering the segment so cached and fresh scans agree.
+            // Diagnostics and embedding come from the windows covering the segment so cached and fresh scans agree.
             var covered = windowItems.Where(w => w.EndTimeSeconds > seg.StartTimeSeconds && w.StartTimeSeconds < seg.EndTimeSeconds).ToList();
             double snrDb = covered.Count > 0 ? covered.Average(w => w.SnrDb) : 20.0;
             bool isOverlap = covered.Any(w => w.SuspectedOverlap);
+
+            if (covered.Count > 0)
+            {
+                float[] segEmb = new float[covered[0].Embedding.Length];
+                for (int w = 0; w < covered.Count; w++)
+                {
+                    for (int d = 0; d < segEmb.Length; d++)
+                    {
+                        segEmb[d] += covered[w].Embedding[d];
+                    }
+                }
+                float norm = MathF.Sqrt(segEmb.Sum(x => x * x));
+                if (norm > 1e-12f)
+                {
+                    for (int d = 0; d < segEmb.Length; d++) segEmb[d] /= norm;
+                }
+                seg.Embedding = segEmb;
+            }
 
             var reasonFlags = AcousticDiagnostics.EvaluateReasonFlags(duration, snrDb, isOverlap, false);
             seg.ReasonFlags = reasonFlags;
@@ -435,6 +482,7 @@ public sealed class PipelineScanner
         ScoreNormalizer? normalizer = null,
         IReadOnlyDictionary<string, VoiceProfile>? clipProfileMap = null,
         int scoreSmoothingRadius = DefaultScoreSmoothingRadius,
+        bool recursive = true,
         CancellationToken cancellationToken = default)
     {
         var stopwatch = Stopwatch.StartNew();
@@ -442,10 +490,11 @@ public sealed class PipelineScanner
         var mediaFiles = new List<string>();
         if (Directory.Exists(inputPath))
         {
+            var searchOpt = recursive ? SearchOption.AllDirectories : SearchOption.TopDirectoryOnly;
             string[] extensions = { "*.wav", "*.flac", "*.mp3", "*.ogg", "*.mp4", "*.mkv", "*.m4a" };
             foreach (var ext in extensions)
             {
-                mediaFiles.AddRange(Directory.GetFiles(inputPath, ext, SearchOption.TopDirectoryOnly));
+                mediaFiles.AddRange(Directory.GetFiles(inputPath, ext, searchOpt));
             }
             mediaFiles.Sort();
         }

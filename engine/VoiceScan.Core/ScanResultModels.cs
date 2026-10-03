@@ -45,6 +45,9 @@ public sealed class FileScanResult
     [JsonPropertyName("clip_id")]
     public string ClipId { get; set; } = string.Empty;
 
+    [JsonPropertyName("file_hash")]
+    public string FileHash { get; set; } = string.Empty;
+
     [JsonPropertyName("duration_seconds")]
     public double DurationSeconds { get; set; }
 
@@ -85,4 +88,8 @@ public sealed class DetectedSegment
 
     [JsonPropertyName("reason_flags")]
     public List<string> ReasonFlags { get; set; } = new();
+
+    [JsonPropertyName("embedding")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public float[]? Embedding { get; set; }
 }
