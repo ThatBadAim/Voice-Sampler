@@ -1,3 +1,5 @@
+using System.Diagnostics;
+
 namespace VoiceScan.App.Core.Services;
 
 public interface IAudioPlaybackController : IDisposable
@@ -6,6 +8,7 @@ public interface IAudioPlaybackController : IDisposable
     event EventHandler<bool>? PlayStateChanged;
 
     bool IsPlaying { get; }
+    bool IsAudioAvailable { get; }
     double CurrentPositionSeconds { get; }
     double TotalDurationSeconds { get; }
     string? CurrentFilePath { get; }
@@ -20,8 +23,13 @@ public interface IAudioPlaybackController : IDisposable
 
 public sealed class AudioPlaybackController : IAudioPlaybackController
 {
+    private readonly IAudioOutput _output;
     private readonly System.Timers.Timer _playbackTimer;
-    private double _currentPositionSeconds;
+    private readonly Stopwatch _clock = new();
+    private readonly object _gate = new();
+
+    private IAudioOutputSession? _session;
+    private double _positionAtStart;
     private double _totalDurationSeconds;
     private double? _stopAtPositionSeconds;
     private bool _isPlaying;
@@ -31,12 +39,16 @@ public sealed class AudioPlaybackController : IAudioPlaybackController
     public event EventHandler<bool>? PlayStateChanged;
 
     public bool IsPlaying => _isPlaying;
-    public double CurrentPositionSeconds => _currentPositionSeconds;
+    public bool IsAudioAvailable => _output.IsAvailable;
+    public double CurrentPositionSeconds => _isPlaying ? ClampedLivePosition() : _positionAtStart;
     public double TotalDurationSeconds => _totalDurationSeconds;
     public string? CurrentFilePath => _currentFilePath;
 
-    public AudioPlaybackController()
+    public AudioPlaybackController() : this(new FfplayAudioOutput()) { }
+
+    public AudioPlaybackController(IAudioOutput output)
     {
+        _output = output;
         // 50ms tick interval for 20fps smooth cursor movement
         _playbackTimer = new System.Timers.Timer(50);
         _playbackTimer.Elapsed += OnTimerElapsed;
@@ -48,24 +60,31 @@ public sealed class AudioPlaybackController : IAudioPlaybackController
         Pause();
         _currentFilePath = filePath;
         _totalDurationSeconds = durationSeconds;
-        _currentPositionSeconds = 0.0;
+        _positionAtStart = 0.0;
         _stopAtPositionSeconds = null;
-        PositionChanged?.Invoke(this, _currentPositionSeconds);
+        PositionChanged?.Invoke(this, _positionAtStart);
     }
 
     public void Play()
     {
-        if (_isPlaying || _totalDurationSeconds <= 0.0) return;
-        _isPlaying = true;
-        _playbackTimer.Start();
+        lock (_gate)
+        {
+            if (_isPlaying || _totalDurationSeconds <= 0.0 || _currentFilePath is null || !_output.IsAvailable) return;
+            StartSession();
+        }
         PlayStateChanged?.Invoke(this, true);
     }
 
     public void Pause()
     {
-        if (!_isPlaying) return;
-        _isPlaying = false;
-        _playbackTimer.Stop();
+        double position;
+        lock (_gate)
+        {
+            if (!_isPlaying) return;
+            position = ClampedLivePosition();
+            StopSession();
+            _positionAtStart = position;
+        }
         PlayStateChanged?.Invoke(this, false);
     }
 
@@ -77,39 +96,76 @@ public sealed class AudioPlaybackController : IAudioPlaybackController
 
     public void SeekTo(double positionSeconds)
     {
-        _currentPositionSeconds = Math.Clamp(positionSeconds, 0.0, _totalDurationSeconds);
-        PositionChanged?.Invoke(this, _currentPositionSeconds);
+        bool wasPlaying;
+        lock (_gate)
+        {
+            wasPlaying = _isPlaying;
+            if (wasPlaying) StopSession();
+            _positionAtStart = Math.Clamp(positionSeconds, 0.0, _totalDurationSeconds);
+            if (wasPlaying) StartSession();
+        }
+        PositionChanged?.Invoke(this, _positionAtStart);
     }
 
     public void PlaySegment(double startTimeSeconds, double endTimeSeconds)
     {
+        Pause();
         SeekTo(startTimeSeconds);
         _stopAtPositionSeconds = endTimeSeconds;
         Play();
     }
 
+    private void StartSession()
+    {
+        double? length = _stopAtPositionSeconds.HasValue ? _stopAtPositionSeconds.Value - _positionAtStart : null;
+        _session = _output.Start(_currentFilePath!, _positionAtStart, length);
+        _clock.Restart();
+        _isPlaying = true;
+        _playbackTimer.Start();
+    }
+
+    private void StopSession()
+    {
+        _playbackTimer.Stop();
+        _clock.Stop();
+        _session?.Dispose();
+        _session = null;
+        _isPlaying = false;
+    }
+
+    private double ClampedLivePosition()
+    {
+        double live = _positionAtStart + _clock.Elapsed.TotalSeconds;
+        double limit = _stopAtPositionSeconds ?? _totalDurationSeconds;
+        return Math.Min(live, Math.Min(limit, _totalDurationSeconds));
+    }
+
     private void OnTimerElapsed(object? sender, System.Timers.ElapsedEventArgs e)
     {
-        _currentPositionSeconds += 0.050; // +50ms
-
-        if (_stopAtPositionSeconds.HasValue && _currentPositionSeconds >= _stopAtPositionSeconds.Value)
+        double position;
+        bool finished;
+        lock (_gate)
         {
-            _currentPositionSeconds = _stopAtPositionSeconds.Value;
-            Pause();
-            _stopAtPositionSeconds = null;
-        }
-        else if (_currentPositionSeconds >= _totalDurationSeconds)
-        {
-            _currentPositionSeconds = _totalDurationSeconds;
-            Pause();
+            if (!_isPlaying) return;
+            position = ClampedLivePosition();
+            double limit = _stopAtPositionSeconds ?? _totalDurationSeconds;
+            finished = position >= limit || (_session?.HasExited ?? true);
+            if (finished)
+            {
+                position = Math.Min(position, limit);
+                StopSession();
+                _positionAtStart = position;
+                _stopAtPositionSeconds = null;
+            }
         }
 
-        PositionChanged?.Invoke(this, _currentPositionSeconds);
+        PositionChanged?.Invoke(this, position);
+        if (finished) PlayStateChanged?.Invoke(this, false);
     }
 
     public void Dispose()
     {
-        _playbackTimer.Stop();
+        lock (_gate) StopSession();
         _playbackTimer.Dispose();
     }
 }

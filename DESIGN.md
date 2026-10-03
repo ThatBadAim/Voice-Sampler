@@ -1,12 +1,12 @@
 # VoiceScan System Design
 
 ## 1. Product Description
-VoiceScan is a fully local, privacy-first Windows application and high-performance CLI engine designed to enroll a person's voice and scan long audio and video recordings (primarily gameplay captures where multiple players' voice chat is mixed with game audio, music, and sound effects) to pinpoint exactly where that specific person speaks, or verify their absence.
+VoiceScan is a fully local, privacy-first cross-platform (Windows + Linux) application and high-performance CLI engine designed to enroll a person's voice and scan long audio and video recordings (primarily gameplay captures where multiple players' voice chat is mixed with game audio, music, and sound effects) to pinpoint exactly where that specific person speaks, or verify their absence.
 
 ### Core Principles
 - **100% Offline & Private:** Zero network calls, zero telemetry, and zero third-party cloud dependencies at runtime. Protects sensitive biometric voice data and complies with strict privacy standards (e.g., UK GDPR Special Category biometric data).
 - **Fast Enrollment:** Uses pre-trained speaker verification embeddings rather than per-user model training. Enrolls a voice profile in seconds by averaging embeddings from short clean reference clips.
-- **Hardware Acceleration:** Native Windows C#/.NET 8+ engine utilizing ONNX Runtime with NVIDIA CUDA execution provider for high-throughput batch inference.
+- **Hardware Acceleration:** Native C#/.NET engine for Windows and Linux utilizing ONNX Runtime with the NVIDIA CUDA execution provider for high-throughput batch inference. The default build is CPU-only; build with `-p:VoiceScanGpu=true` (CUDA 12 + cuDNN 9) for GPU, and the app shows a banner whenever inference runs on CPU.
 - **Reproducible Evaluation:** All operational claims and decision thresholds are anchored in an automated evaluation harness with statistical confidence bounds.
 
 ---
@@ -62,7 +62,7 @@ flowchart TD
 6. **Within-File Speaker Clustering:** Agglomerative Hierarchical Clustering (AHC) clusters all window embeddings within the file into speaker identities. A cluster centroid embedding is computed per speaker turn. Scoring clusters rather than individual noisy windows eliminates single-frame false alarms.
 7. **Cluster Scoring with Score Normalization:** Cosine similarity between target profile centroid and file cluster embeddings. Adaptive Symmetric Score Normalization (AS-Norm) calibrates similarity scores against a pre-indexed cohort of non-target impostor embeddings.
 8. **Temporal Smoothing & Segment Aggregation:** Window-level and cluster-level scores are mapped back to audio timestamps. Adjacent hits within $\Delta t_{\text{merge}}$ (e.g., 0.5s) are merged into continuous speech turns. Isolated single-window spikes lacking temporal support are discarded.
-9. **Verdict & Segment Generation:** Output formatted as timestamped segments with start/end times, verdict classification, calibrated confidence score, and reason flags.
+9. **Verdict & Segment Generation:** Output formatted as timestamped segments with start/end times, verdict classification, confidence score, and reason flags. Confidence is the cluster cosine similarity to the profile, or a fixed sigmoid of the AS-Norm z-score when a cohort is supplied; it is not a calibrated probability until a calibration is fitted on labelled real-speech trials.
 
 ---
 
@@ -115,18 +115,18 @@ Per-window error rates (e.g., standard EER) are unrepresentative for long-form g
 
 ---
 
-## 6. Desktop UI, Benchmark Integration & Evidence Reporting
+## 6. Desktop UI & Evidence Reporting
 
-The user application layer (`/app`) provides a fluent WinUI 3 interface built upon the headless `VoiceScan.Core` engine, decoupled into 5 specialized screens:
+The user application layer (`/app`) provides an Avalonia UI (Fluent theme, dark by default with a light toggle) interface built upon the headless `VoiceScan.Core` engine, decoupled into 4 screens plus a first-run setup window. The setup window appears only when the ONNX models or FFmpeg are missing, lists exactly what is missing and lets the user copy model files into `LocalApplicationData/VoiceScan/models`. Profiles, the embedding cache and review data live under `LocalApplicationData/VoiceScan`.
 
 1. **Enrollment Wizard (`EnrollmentWizardView`):**
-   - Microphone capture or file import.
+   - Audio or video file import; the quality check runs automatically after a file is chosen.
    - Enforced ethical and legal consent gate (`HasConsent == true`).
    - Plain-language audio quality verification (speech duration $\ge 4.0\,\text{s}$, SNR check, background noise level).
-   - Generates persistent voice profile (`.json`) with multi-condition augmentation (Opus & AGC simulation).
+   - Saves a named voice profile (`.json`) to the per-user profiles folder, then moves to the Scan screen with it selected. A fresh install opens on this screen.
 
 2. **Scan Dashboard (`ScanView`):**
-   - Audio folder or batch file picker with profile multi-selection.
+   - Audio folder picker and a drop-down of saved voice profiles.
    - Real-time scanning progress: per-file status, overall ETA, processing speed multiple ($\ge 10\times\text{--}50\times$), GPU / CPU device indicators.
    - Asynchronous cancellation and resume mechanisms.
 
@@ -140,14 +140,9 @@ The user application layer (`/app`) provides a fluent WinUI 3 interface built up
    - Confirmed segments incrementally update the voice profile centroid.
    - Rejected segments populate the local impostor negative cohort in SQLite (`ReviewDatabase`).
 
-5. **Benchmark & Evaluation Metrics (`BenchmarkView`):**
-   - Direct integration with `/eval` test harness output (`eval/reports/*/eval_results.json`).
-   - Real measured performance metrics: Overall Recall, Precision, FA/hour, and Mean Timing Error.
-   - Stratified SNR breakdown tables displaying empirical 95% bootstrap confidence intervals ($[L, U]$) to guarantee transparent accuracy claims.
-
-6. **Evidence Report Export & Local Auditing (`EvidenceReportExporter`):**
+5. **Evidence Report Export & Local Auditing (`EvidenceReportExporter`):**
    - Forensic-grade audit reports exported directly in PDF 1.4 and CSV formats.
-   - Per-segment audit fields: SHA-256 media hash, timestamps, verdict, calibrated confidence, reason flags, profile name, model version, settings snapshot, and scan date.
+   - Per-segment audit fields: SHA-256 media hash, timestamps, verdict, confidence, reason flags, profile name, model version, settings snapshot, and scan date.
    - Hit audio slicer extracting 16 kHz WAV audio clips into `audio_hits/` for immediate playback and external review.
    - Thread-safe local file logging to `logs/voicescan.log` with automatic CUDA fallback warnings and error recovery.
 

@@ -19,6 +19,7 @@ This document tracks verified licenses for neural network weights, training data
 | **DeepFilterNet** | [`Rikorose/DeepFilterNet`](https://github.com/Rikorose/DeepFilterNet) | Dual MIT / Apache-2.0 | DNS Challenge 4, Common Voice, VCTK | **Yes (Permitted)** | Software and released pre-trained weights are dual-licensed MIT / Apache-2.0. Fully safe for commercial integration. |
 | **Demucs / MDX-Net** | [`facebookresearch/demucs`](https://github.com/facebookresearch/demucs) | MIT | MUSDB18-HQ (CC BY-NC-SA 4.0) | **No (Blocked for pre-trained weights)** | Code is MIT, but Meta's official weights were trained on MUSDB18-HQ, which strictly forbids commercial use. Demucs cannot be deployed in a commercial product without retraining on licensed music/audio stems. |
 | **sherpa-onnx** | [`k2-fsa/sherpa-onnx`](https://github.com/k2-fsa/sherpa-onnx) | Apache-2.0 | N/A (Inference runtime framework) | **Yes (Permitted)** | Permissive Apache-2.0 runtime. Note: Default NuGet packages are CPU-only; CUDA on Windows requires manual native DLL deployment or building with GPU flags. Direct ONNX Runtime C# bindings are preferred. |
+| **Avalonia UI** | [`AvaloniaUI/Avalonia`](https://github.com/AvaloniaUI/Avalonia) | MIT | N/A (UI framework; bundles SkiaSharp, MIT) | **Yes** | Replaces WinUI 3 / Windows App SDK; Windows + Linux. Inter font (OFL-1.1) via Avalonia.Fonts.Inter. |
 | **FFmpeg** | [`FFmpeg/FFmpeg`](https://ffmpeg.org/) | LGPL v2.1+ | N/A (Media decoding library) | **Yes (Permitted under LGPL)** | Chunked decoding must link dynamically to LGPL-configured builds (avoid `--enable-gpl` or `--enable-nonfree` to prevent GPL infection of commercial binaries). |
 
 ---
@@ -36,3 +37,7 @@ This document tracks verified licenses for neural network weights, training data
 - **Denoising/Enhancement:** DeepFilterNet (MIT/Apache-2.0, commercially unencumbered).
 - **Speaker Embedding Extraction (Baseline & Demo):** CAM++ (3D-Speaker) under Apache-2.0 for commercial viability, with WeSpeaker ResNet34 evaluated side-by-side as an academic performance reference.
 - **Post-Demo Commercial Step:** Retrain or fine-tune embedding models on permissible multi-speaker corpora (e.g., Mozilla Common Voice, LibriSpeech, and synthetic consenting game audio).
+
+## FFmpeg (downloaded by the Windows installer)
+
+The installer downloads the "release essentials" build from https://www.gyan.dev/ffmpeg/builds/ (GPL v3) when FFmpeg is not already installed, and runs it as a separate process. It is not linked into VoiceScan. FFmpeg source and license: https://ffmpeg.org/legal.html

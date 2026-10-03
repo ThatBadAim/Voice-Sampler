@@ -199,22 +199,23 @@ public class StorageCacheTests
         {
             int fileCount = 50;
             int sr = 16000;
-            double clipSec = 2.5; // Short clips so test executes fast
-            int sampleCount = (int)(clipSec * sr);
 
-            // 1. Synthesize 50 distinct test WAV files
+            // Silero correctly ignores pure tones, so derive the 50 distinct files from a real speech clip (JFK, public domain).
+            float[] source = (await AudioDecoder.DecodeEntireFileAsync(Path.Combine(AppContext.BaseDirectory, "fixtures", "jfk_speech.wav")))
+                .Take(6 * sr).ToArray();
+
+            // 1. Synthesize 50 distinct test WAV files (distinct gain => distinct content hash)
             var filePaths = new List<string>(fileCount);
             for (int i = 0; i < fileCount; i++)
             {
                 string path = Path.Combine(tempDir, $"test_audio_{i:03d}.wav");
-                float f0 = 100f + (i * 10f);
+                float gain = 0.5f + (i * 0.01f);
 
                 using (var fs = new FileStream(path, FileMode.Create, FileAccess.Write))
                 using (var writer = new BinaryWriter(fs))
                 {
-                    // Write standard 16-bit PCM WAV header
                     writer.Write("RIFF"u8.ToArray());
-                    writer.Write(36 + (sampleCount * 2));
+                    writer.Write(36 + (source.Length * 2));
                     writer.Write("WAVE"u8.ToArray());
                     writer.Write("fmt "u8.ToArray());
                     writer.Write(16); // subchunk1 size
@@ -225,13 +226,11 @@ public class StorageCacheTests
                     writer.Write((short)2); // Block align
                     writer.Write((short)16); // Bits per sample
                     writer.Write("data"u8.ToArray());
-                    writer.Write(sampleCount * 2);
+                    writer.Write(source.Length * 2);
 
-                    for (int s = 0; s < sampleCount; s++)
+                    for (int s = 0; s < source.Length; s++)
                     {
-                        float val = 0.4f * MathF.Sin(2f * MathF.PI * f0 * s / sr);
-                        short sample16 = (short)(val * 32767f);
-                        writer.Write(sample16);
+                        writer.Write((short)(Math.Clamp(source[s] * gain, -1f, 1f) * 32767f));
                     }
                 }
 

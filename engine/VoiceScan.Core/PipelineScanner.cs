@@ -7,7 +7,6 @@ using System.IO;
 using System.Linq;
 using System.Text.Json;
 using System.Threading;
-using System.Threading.Channels;
 using System.Threading.Tasks;
 using VoiceScan.Core.Storage;
 
@@ -18,6 +17,8 @@ using VoiceScan.Core.Storage;
 /// </summary>
 public sealed class PipelineScanner
 {
+    public const int DefaultScoreSmoothingRadius = 0;
+
     private readonly ISpeakerEmbeddingModel _embeddingModel;
     private readonly SileroVad _vad;
     private readonly VoiceScanDatabase? _database;
@@ -55,6 +56,7 @@ public sealed class PipelineScanner
         double peakDelta = 0.04,
         double neighborToleranceSec = 2.0,
         ScoreNormalizer? normalizer = null,
+        int scoreSmoothingRadius = DefaultScoreSmoothingRadius,
         CancellationToken cancellationToken = default)
     {
         if (!File.Exists(mediaFilePath))
@@ -63,8 +65,8 @@ public sealed class PipelineScanner
         }
 
         string fileHash = string.Empty;
-        string vadSettings = "silero-v5:0.5";
-        string windowSettings = $"w:{windowDurationSec:F1}_h:{hopDurationSec:F1}";
+        string vadSettings = SileroVad.SettingsFingerprint;
+        string windowSettings = $"w:{windowDurationSec:F1}_h:{hopDurationSec:F1}_trk:{audioTrackIndex}_{SpeechWindowExtractor.Fingerprint}_{Filterbank.Fingerprint}";
         string cacheKey = string.Empty;
 
         // 1. Check SQLite Embedding Cache
@@ -81,7 +83,7 @@ public sealed class PipelineScanner
                 for (int i = 0; i < cachedWindows.Count; i++)
                 {
                     var cw = cachedWindows[i];
-                    cachedWindowItems.Add(new WindowItem(i, cw.StartTimeSeconds, cw.EndTimeSeconds, cw.Embedding));
+                    cachedWindowItems.Add(new WindowItem(i, cw.StartTimeSeconds, cw.EndTimeSeconds, cw.Embedding, cw.SnrDb, cw.SuspectedOverlap));
                 }
 
                 var (cachedSegments, cachedMaxConf, cachedVerdict) = ScoreAndAggregate(
@@ -95,7 +97,7 @@ public sealed class PipelineScanner
                     peakDelta,
                     neighborToleranceSec,
                     normalizer,
-                    audioPcm: null);
+                    scoreSmoothingRadius);
 
                 double approxDuration = cachedWindows.Count > 0 ? cachedWindows[^1].EndTimeSeconds : 0.0;
 
@@ -114,51 +116,23 @@ public sealed class PipelineScanner
             }
         }
 
-        // CACHE MISS: Execute pipelined decode + VAD + windowing + GPU embedding extraction
-        var channel = Channel.CreateBounded<DecodedAudioChunk>(new BoundedChannelOptions(8)
-        {
-            FullMode = BoundedChannelFullMode.Wait,
-            SingleWriter = true,
-            SingleReader = true
-        });
+        // CACHE MISS: stream-decode into a temp spool while running VAD, then embed windows read back
+        // from the spool. Memory stays bounded by the batch size however long the recording is.
+        using var spool = new SpooledAudio();
+        var vadStream = _vad.StartProbabilityStream();
 
-        // 2. Launch FFmpeg decode producer task
-        var decodeTask = Task.Run(async () =>
+        await foreach (var chunk in AudioDecoder.StreamDecodeAsync(
+            mediaFilePath,
+            audioTrackIndex: audioTrackIndex,
+            sampleRate: 16000,
+            chunkSize: 32000,
+            cancellationToken: cancellationToken))
         {
-            try
-            {
-                await foreach (var chunk in AudioDecoder.StreamDecodeAsync(
-                    mediaFilePath,
-                    audioTrackIndex: audioTrackIndex,
-                    sampleRate: 16000,
-                    chunkSize: 32000,
-                    cancellationToken: cancellationToken))
-                {
-                    await channel.Writer.WriteAsync(chunk, cancellationToken);
-                }
-                channel.Writer.Complete();
-            }
-            catch (Exception ex)
-            {
-                channel.Writer.Complete(ex);
-            }
-        }, cancellationToken);
-
-        // 3. Concurrently consume chunks
-        var allAudioChunks = new List<float[]>();
-        long totalSamples = 0;
-
-        while (await channel.Reader.WaitToReadAsync(cancellationToken))
-        {
-            while (channel.Reader.TryRead(out var chunk))
-            {
-                allAudioChunks.Add(chunk.Samples);
-                totalSamples += chunk.Samples.Length;
-            }
+            spool.Append(chunk.Samples);
+            vadStream.Feed(chunk.Samples, chunk.Samples.Length);
         }
 
-        await decodeTask;
-
+        long totalSamples = spool.SampleCount;
         if (totalSamples == 0)
         {
             Logging.VoiceScanLogger.Warn("PipelineScanner", $"Zero audio samples decoded from {mediaFilePath}. Returning No match.");
@@ -174,23 +148,10 @@ public sealed class PipelineScanner
             };
         }
 
-        // Flatten collected audio for VAD and windowing
-        float[] fullAudio = new float[totalSamples];
-        int offset = 0;
-        foreach (var c in allAudioChunks)
-        {
-            Array.Copy(c, 0, fullAudio, offset, c.Length);
-            offset += c.Length;
-        }
-
         double durationSeconds = (double)totalSamples / 16000.0;
-
-        // Run Silero VAD
-        var speechIntervals = _vad.DetectSpeechIntervals(fullAudio);
-
-        // Extract 2s windows with 1s hop
-        var windows = SpeechWindowExtractor.ExtractWindows(
-            fullAudio,
+        var speechIntervals = SileroVad.ProbabilitiesToIntervals(vadStream.Finish(), durationSeconds, 0.5f);
+        var plans = SpeechWindowExtractor.PlanWindows(
+            totalSamples,
             speechIntervals,
             sampleRate: 16000,
             windowSec: windowDurationSec,
@@ -199,13 +160,20 @@ public sealed class PipelineScanner
         var windowsToCache = new List<CachedWindow>();
         var windowItems = new List<WindowItem>();
 
-        if (windows.Count > 0 && targetProfile.Centroid.Length > 0)
+        if (plans.Count > 0 && targetProfile.Centroid.Length > 0)
         {
             // Process windows in batches through GPU embedding model
-            for (int i = 0; i < windows.Count; i += _batchSize)
+            for (int i = 0; i < plans.Count; i += _batchSize)
             {
-                int count = Math.Min(_batchSize, windows.Count - i);
-                var batchWindows = windows.Skip(i).Take(count).ToList();
+                cancellationToken.ThrowIfCancellationRequested();
+                int count = Math.Min(_batchSize, plans.Count - i);
+                var batchWindows = Enumerable.Range(i, count)
+                    .Select(k => SpeechWindowExtractor.Materialize(
+                        plans[k],
+                        spool.Read(plans[k].SourceStart, plans[k].SourceLength),
+                        16000,
+                        windowDurationSec))
+                    .ToList();
                 var batchAudios = batchWindows.Select(w => w.AudioSamples).ToList();
 
                 var batchEmbeddings = _embeddingModel.ExtractEmbeddingsBatch(batchAudios);
@@ -214,8 +182,10 @@ public sealed class PipelineScanner
                 {
                     var win = batchWindows[b];
                     var emb = batchEmbeddings[b];
-                    windowsToCache.Add(new CachedWindow(win.StartTimeSeconds, win.EndTimeSeconds, emb));
-                    windowItems.Add(new WindowItem(windowItems.Count, win.StartTimeSeconds, win.EndTimeSeconds, emb));
+                    double snrDb = AcousticDiagnostics.EstimateSnrDb(win.AudioSamples);
+                    bool overlap = AcousticDiagnostics.DetectSuspectedOverlap(win.AudioSamples, windowCount: 2);
+                    windowsToCache.Add(new CachedWindow(win.StartTimeSeconds, win.EndTimeSeconds, emb, snrDb, overlap));
+                    windowItems.Add(new WindowItem(windowItems.Count, win.StartTimeSeconds, win.EndTimeSeconds, emb, snrDb, overlap));
                 }
             }
         }
@@ -244,7 +214,9 @@ public sealed class PipelineScanner
             peakDelta,
             neighborToleranceSec,
             normalizer,
-            audioPcm: fullAudio);
+            scoreSmoothingRadius);
+
+        var (minPeaks, maxPeaks) = spool.Envelope(300);
 
         var result = new FileScanResult
         {
@@ -254,7 +226,9 @@ public sealed class PipelineScanner
             AudioTrackIndex = audioTrackIndex,
             Verdict = verdict,
             MaxConfidence = Math.Round(maxConfidence, 4),
-            Segments = segments
+            Segments = segments,
+            WaveformMinPeaks = minPeaks,
+            WaveformMaxPeaks = maxPeaks
         };
 
         // 5. Persist scan result to database if active
@@ -290,7 +264,7 @@ public sealed class PipelineScanner
         double peakDelta = 0.04,
         double neighborToleranceSec = 2.0,
         ScoreNormalizer? normalizer = null,
-        float[]? audioPcm = null)
+        int scoreSmoothingRadius = DefaultScoreSmoothingRadius)
     {
         if (windowItems.Count == 0 || targetProfile.Centroid.Length == 0)
         {
@@ -301,22 +275,42 @@ public sealed class PipelineScanner
         var hits = new List<(double Start, double End, double Confidence)>();
         double rawMaxConfidence = 0.0;
 
+        (double Mean, double StdDev)? targetStats = normalizer != null
+            ? normalizer.ComputeCohortStats(targetProfile.Centroid)
+            : null;
+
         if (!enableClustering)
         {
-            foreach (var win in windowItems)
+            var ordered = windowItems.OrderBy(w => w.StartTimeSeconds).ToList();
+            var scores = new double[ordered.Count];
+            for (int i = 0; i < ordered.Count; i++)
             {
+                var win = ordered[i];
                 float rawSim = SimilarityScorer.CosineSimilarity(win.Embedding, targetProfile.Centroid);
-                float sim = rawSim;
-                if (normalizer != null)
+                scores[i] = rawSim;
+                if (normalizer != null && targetStats.HasValue)
                 {
-                    double z = normalizer.NormalizeScore(rawSim, targetProfile.Centroid, win.Embedding);
-                    sim = (float)ScoreNormalizer.CalibrateZScoreToConfidence(z);
+                    double z = normalizer.NormalizeScoreWithTargetStats(rawSim, targetStats.Value, win.Embedding);
+                    scores[i] = ScoreNormalizer.CalibrateZScoreToConfidence(z);
                 }
+            }
 
+            if (scoreSmoothingRadius > 0)
+            {
+                scores = SimilarityScorer.SmoothScores(
+                    ordered.Select(w => w.StartTimeSeconds).ToList(),
+                    scores,
+                    scoreSmoothingRadius,
+                    neighborToleranceSec);
+            }
+
+            for (int i = 0; i < ordered.Count; i++)
+            {
+                double sim = scores[i];
                 if (sim > rawMaxConfidence) rawMaxConfidence = sim;
                 if (sim >= possibleThreshold)
                 {
-                    hits.Add((win.StartTimeSeconds, win.EndTimeSeconds, sim));
+                    hits.Add((ordered[i].StartTimeSeconds, ordered[i].EndTimeSeconds, sim));
                 }
             }
         }
@@ -328,9 +322,9 @@ public sealed class PipelineScanner
             {
                 float rawSim = SimilarityScorer.CosineSimilarity(cluster.Centroid, targetProfile.Centroid);
                 float clusterScore = rawSim;
-                if (normalizer != null)
+                if (normalizer != null && targetStats.HasValue)
                 {
-                    double z = normalizer.NormalizeScore(rawSim, targetProfile.Centroid, cluster.Centroid);
+                    double z = normalizer.NormalizeScoreWithTargetStats(rawSim, targetStats.Value, cluster.Centroid);
                     clusterScore = (float)ScoreNormalizer.CalibrateZScoreToConfidence(z);
                 }
 
@@ -364,22 +358,11 @@ public sealed class PipelineScanner
         foreach (var seg in segments)
         {
             double duration = seg.EndTimeSeconds - seg.StartTimeSeconds;
-            double snrDb = 20.0;
-            bool isOverlap = false;
 
-            if (audioPcm != null && audioPcm.Length > 0)
-            {
-                int startIdx = Math.Clamp((int)(seg.StartTimeSeconds * 16000), 0, audioPcm.Length);
-                int endIdx = Math.Clamp((int)(seg.EndTimeSeconds * 16000), startIdx, audioPcm.Length);
-                int len = endIdx - startIdx;
-                if (len > 0)
-                {
-                    float[] slice = new float[len];
-                    Array.Copy(audioPcm, startIdx, slice, 0, len);
-                    snrDb = AcousticDiagnostics.EstimateSnrDb(slice);
-                    isOverlap = AcousticDiagnostics.DetectSuspectedOverlap(slice, Math.Max(1, (int)Math.Round(duration)));
-                }
-            }
+            // Diagnostics come from the windows covering the segment so cached and fresh scans agree.
+            var covered = windowItems.Where(w => w.EndTimeSeconds > seg.StartTimeSeconds && w.StartTimeSeconds < seg.EndTimeSeconds).ToList();
+            double snrDb = covered.Count > 0 ? covered.Average(w => w.SnrDb) : 20.0;
+            bool isOverlap = covered.Any(w => w.SuspectedOverlap);
 
             var reasonFlags = AcousticDiagnostics.EvaluateReasonFlags(duration, snrDb, isOverlap, false);
             seg.ReasonFlags = reasonFlags;
@@ -451,6 +434,7 @@ public sealed class PipelineScanner
         double neighborToleranceSec = 2.0,
         ScoreNormalizer? normalizer = null,
         IReadOnlyDictionary<string, VoiceProfile>? clipProfileMap = null,
+        int scoreSmoothingRadius = DefaultScoreSmoothingRadius,
         CancellationToken cancellationToken = default)
     {
         var stopwatch = Stopwatch.StartNew();
@@ -492,6 +476,7 @@ public sealed class PipelineScanner
                     peakDelta: peakDelta,
                     neighborToleranceSec: neighborToleranceSec,
                     normalizer: normalizer,
+                    scoreSmoothingRadius: scoreSmoothingRadius,
                     cancellationToken: cancellationToken);
             }
             catch (OperationCanceledException)

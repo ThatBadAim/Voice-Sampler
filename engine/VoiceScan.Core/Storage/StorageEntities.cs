@@ -6,7 +6,9 @@ using System.Collections.Generic;
 public record CachedWindow(
     double StartTimeSeconds,
     double EndTimeSeconds,
-    float[] Embedding);
+    float[] Embedding,
+    double SnrDb = 20.0,
+    bool SuspectedOverlap = false);
 
 public record StoredProfileInfo(
     string Name,

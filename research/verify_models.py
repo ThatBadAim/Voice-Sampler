@@ -26,66 +26,50 @@ def compute_fbank(
     n_mels: int = 80,
     frame_length_ms: float = 25.0,
     frame_shift_ms: float = 10.0,
+    low_freq: float = 20.0,
+    povey_window: bool = False,
 ) -> np.ndarray:
-    """Compute 80-dim log-mel filterbank features with CMVN."""
-    # Ensure float32 in [-1.0, 1.0]
-    if audio.dtype != np.float32:
-        audio = audio.astype(np.float32)
-    if np.max(np.abs(audio)) > 1.0:
-        audio = audio / np.max(np.abs(audio))
+    """80-dim log-mel fbank with mean normalization, matching kaldi-native-fbank.
 
-    # Pre-emphasis
-    pre_emphasized = np.append(audio[0], audio[1:] - 0.97 * audio[:-1])
-
+    Same recipe the WeSpeaker / 3D-Speaker models were trained with: int16-range samples,
+    per-frame DC removal and pre-emphasis, Hamming window, 20 Hz low edge, triangular filters
+    on continuous mel positions, float-epsilon floor.
+    """
+    # WeSpeaker takes int16-range samples + Hamming; CAM++ takes [-1, 1] samples + Povey (3D-Speaker defaults).
+    x = audio.astype(np.float64) * (1.0 if povey_window else 32768.0)
     frame_len = int(sample_rate * frame_length_ms / 1000.0)
     frame_step = int(sample_rate * frame_shift_ms / 1000.0)
-    num_samples = len(pre_emphasized)
+    if len(x) < frame_len:
+        x = np.pad(x, (0, frame_len - len(x)))
 
-    if num_samples < frame_len:
-        pre_emphasized = np.pad(pre_emphasized, (0, frame_len - num_samples))
-        num_samples = frame_len
+    num_frames = 1 + (len(x) - frame_len) // frame_step
+    idx = np.arange(frame_len)[None, :] + frame_step * np.arange(num_frames)[:, None]
+    frames = x[idx]
+    if povey_window:
+        window = (0.5 - 0.5 * np.cos(2 * np.pi * np.arange(frame_len) / (frame_len - 1))) ** 0.85
+    else:
+        window = np.hamming(frame_len)
+    frames = frames - frames.mean(axis=1, keepdims=True)
+    previous = np.concatenate([frames[:, :1], frames[:, :-1]], axis=1)
+    frames = (frames - 0.97 * previous) * window
 
-    num_frames = 1 + int(np.floor((num_samples - frame_len) / frame_step))
-    indices = (
-        np.tile(np.arange(0, frame_len), (num_frames, 1))
-        + np.tile(np.arange(0, num_frames * frame_step, frame_step), (frame_len, 1)).T
-    )
-
-    frames = pre_emphasized[indices]
-    # Hamming window
-    window = np.hamming(frame_len)
-    frames = frames * window
-
-    # FFT & Power spectrum
     n_fft = 512
-    mag_frames = np.absolute(np.fft.rfft(frames, n_fft))
-    pow_frames = (1.0 / n_fft) * (mag_frames ** 2)
+    power = np.abs(np.fft.rfft(frames, n_fft)) ** 2
 
-    # Mel filterbank
-    low_freq_mel = 0.0
-    high_freq_mel = 2595.0 * np.log10(1.0 + (sample_rate / 2.0) / 700.0)
-    mel_points = np.linspace(low_freq_mel, high_freq_mel, n_mels + 2)
-    hz_points = 700.0 * (10.0 ** (mel_points / 2595.0) - 1.0)
-    bin_points = np.floor((n_fft + 1) * hz_points / sample_rate).astype(int)
+    def hz_to_mel(hz):
+        return 1127.0 * np.log(1.0 + hz / 700.0)
 
-    fbank = np.zeros((n_mels, int(np.floor(n_fft / 2 + 1))))
-    for m in range(1, n_mels + 1):
-        f_m_minus = bin_points[m - 1]
-        f_m = bin_points[m]
-        f_m_plus = bin_points[m + 1]
+    low_mel, high_mel = hz_to_mel(low_freq), hz_to_mel(sample_rate / 2.0)
+    delta = (high_mel - low_mel) / (n_mels + 1)
+    bin_mel = hz_to_mel(np.arange(n_fft // 2 + 1) * sample_rate / n_fft)
+    fbank = np.zeros((n_mels, n_fft // 2 + 1))
+    for m in range(n_mels):
+        left = low_mel + m * delta
+        center, right = left + delta, left + 2 * delta
+        fbank[m] = np.maximum(0.0, np.minimum((bin_mel - left) / (center - left), (right - bin_mel) / (right - center)))
 
-        for k in range(f_m_minus, f_m):
-            fbank[m - 1, k] = (k - bin_points[m - 1]) / (bin_points[m] - bin_points[m - 1])
-        for k in range(f_m, f_m_plus):
-            fbank[m - 1, k] = (bin_points[m + 1] - k) / (bin_points[m + 1] - bin_points[m])
-
-    filter_banks = np.dot(pow_frames, fbank.T)
-    filter_banks = np.where(filter_banks == 0, np.finfo(float).eps, filter_banks)
-    log_filter_banks = np.log(filter_banks)
-
-    # Cepstral Mean Normalization (CMN)
-    log_filter_banks -= np.mean(log_filter_banks, axis=0, keepdims=True)
-    return log_filter_banks.astype(np.float32)
+    log_mel = np.log(np.maximum(power @ fbank.T, np.finfo(np.float32).eps))
+    return (log_mel - log_mel.mean(axis=0, keepdims=True)).astype(np.float32)
 
 
 def create_session(model_path: Path) -> tuple[ort.InferenceSession, str]:

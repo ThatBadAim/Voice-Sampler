@@ -169,6 +169,39 @@ public class AppLayerTests : IDisposable
     }
 
     [Fact]
+    public async Task ReviewDatabase_ConcurrentOperations_NeverThrowConnectionInUse()
+    {
+        await _reviewRepo.InitializeAsync();
+
+        var tasks = Enumerable.Range(0, 20).Select(async i =>
+        {
+            var hit = new ReviewDecisionRecord(
+                SegmentId: $"seg_concurrent_{i}",
+                FilePath: $"recordings/file_{i}.mp4",
+                FileHash: $"hash_{i}",
+                ProfileName: "TargetConcurrent",
+                StartTimeSeconds: i * 2.0,
+                EndTimeSeconds: i * 2.0 + 1.5,
+                Confidence: 0.75 + (i * 0.01),
+                OriginalVerdict: "Match",
+                ReasonFlags: ["CONCURRENT_TEST"],
+                Decision: i % 2 == 0 ? ReviewDecision.Confirmed : ReviewDecision.Rejected,
+                DecidedAtUtc: DateTimeOffset.UtcNow,
+                Notes: $"Concurrent note {i}",
+                SegmentEmbedding: Enumerable.Repeat(0.01f * i, 128).ToArray());
+
+            await _reviewRepo.RecordDecisionAsync(hit);
+            var results = await _reviewRepo.GetDecisionsAsync("TargetConcurrent");
+            Assert.NotEmpty(results);
+        });
+
+        await Task.WhenAll(tasks);
+
+        var finalDecisions = await _reviewRepo.GetDecisionsAsync("TargetConcurrent");
+        Assert.Equal(20, finalDecisions.Count);
+    }
+
+    [Fact]
     public void ResultsViewModel_FilteringAndSorting_OperatesCorrectly()
     {
         var playback = new AudioPlaybackController();
@@ -200,7 +233,8 @@ public class AppLayerTests : IDisposable
     [Fact]
     public void AudioPlaybackController_SeekAndPlaySegment_UpdatesState()
     {
-        using var playback = new AudioPlaybackController();
+        var output = new FakeAudioOutput();
+        using var playback = new AudioPlaybackController(output);
         playback.LoadFile("test.mp4", 100.0);
 
         Assert.False(playback.IsPlaying);
@@ -211,10 +245,56 @@ public class AppLayerTests : IDisposable
 
         playback.PlaySegment(30.0, 35.0);
         Assert.True(playback.IsPlaying);
-        Assert.Equal(30.0, playback.CurrentPositionSeconds);
+        Assert.InRange(playback.CurrentPositionSeconds, 30.0, 30.5);
+
+        Assert.Equal(("test.mp4", 30.0, 5.0), output.Starts[^1]);
 
         playback.Pause();
         Assert.False(playback.IsPlaying);
+        Assert.True(output.Sessions[^1].Disposed);
+    }
+
+    [Fact]
+    public void AudioPlaybackController_WithoutAudioOutput_DoesNotPretendToPlay()
+    {
+        using var playback = new AudioPlaybackController(new FakeAudioOutput { IsAvailable = false });
+        playback.LoadFile("test.mp4", 100.0);
+
+        playback.Play();
+
+        Assert.False(playback.IsAudioAvailable);
+        Assert.False(playback.IsPlaying);
+    }
+
+    [Fact]
+    public void FfplayAudioOutput_BuildArguments_SeeksAndLimitsDuration()
+    {
+        var args = FfplayAudioOutput.BuildArguments("/media/a b.mp4", 12.5, 3.0);
+
+        Assert.Equal(["-nodisp", "-autoexit", "-loglevel", "quiet", "-vn", "-ss", "12.500", "-t", "3.000", "/media/a b.mp4"], args);
+        Assert.DoesNotContain("-t", FfplayAudioOutput.BuildArguments("x.wav", 0.0, null));
+    }
+
+    private sealed class FakeAudioOutput : IAudioOutput
+    {
+        public bool IsAvailable { get; set; } = true;
+        public List<(string Path, double Start, double? Duration)> Starts { get; } = [];
+        public List<FakeSession> Sessions { get; } = [];
+
+        public IAudioOutputSession Start(string filePath, double startSeconds, double? durationSeconds)
+        {
+            Starts.Add((filePath, startSeconds, durationSeconds));
+            var session = new FakeSession();
+            Sessions.Add(session);
+            return session;
+        }
+    }
+
+    private sealed class FakeSession : IAudioOutputSession
+    {
+        public bool Disposed { get; private set; }
+        public bool HasExited => Disposed;
+        public void Dispose() => Disposed = true;
     }
 
     [Fact]
@@ -395,22 +475,80 @@ public class AppLayerTests : IDisposable
     }
 
     [Fact]
-    public async Task BenchmarkService_LoadsRealReportsWithConfidenceIntervals()
+    public void ProfileLibrary_ListsSavedProfiles_NewestFirst_AndSkipsCorruptFiles()
     {
-        var service = new BenchmarkService();
-        var reports = await service.LoadAvailableReportsAsync();
+        string dir = Path.Combine(Path.GetTempPath(), $"vs_profiles_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dir);
+        try
+        {
+            Assert.Empty(ProfileLibrary.List(Path.Combine(dir, "missing")));
 
-        Assert.NotEmpty(reports);
-        var report = reports[0];
-        Assert.False(string.IsNullOrWhiteSpace(report.ReportId));
-        Assert.False(string.IsNullOrWhiteSpace(report.ReportTitle));
-        Assert.True(report.OverallRecall >= 0.0);
-        Assert.True(report.OverallPrecision >= 0.0);
-        Assert.True(report.OverallFaPerHour >= 0.0);
-        Assert.NotEmpty(report.SnrTiers);
+            new VoiceProfile { ProfileName = "old", Centroid = new float[4], CreatedAt = "2026-01-01T00:00:00Z" }
+                .SaveToFile(Path.Combine(dir, "old.json"));
+            new VoiceProfile { ProfileName = "new", Centroid = new float[4], CreatedAt = "2026-06-01T00:00:00Z" }
+                .SaveToFile(Path.Combine(dir, "new.json"));
+            File.WriteAllText(Path.Combine(dir, "broken.json"), "not json");
 
-        // Verify confidence intervals are populated
-        Assert.True(report.OverallRecallHighCi >= report.OverallRecallLowCi);
+            var profiles = ProfileLibrary.List(dir);
+            Assert.Equal(["new", "old"], profiles.Select(p => p.Name));
+        }
+        finally
+        {
+            Directory.Delete(dir, true);
+        }
+    }
+
+    [Fact]
+    public void EnrollmentWizard_DeleteSelectedProfile_RemovesFileAndRaisesEvent()
+    {
+        var vm = new EnrollmentWizardViewModel(new AudioQualityAnalyzer(), new ProfileEnrollmentService(new OnnxEmbeddingModel(), new SileroVad()));
+        string path = Path.Combine(Path.GetTempPath(), $"vs_delete_{Guid.NewGuid():N}.json");
+        new VoiceProfile { ProfileName = "temp", Centroid = new float[4] }.SaveToFile(path);
+        int changed = 0;
+        vm.ProfilesChanged += () => changed++;
+
+        Assert.False(vm.CanDeleteProfile);
+        vm.SelectedProfile = new VoiceProfileSummary("temp", path, 4, 0, DateTimeOffset.UtcNow);
+        Assert.True(vm.CanDeleteProfile);
+
+        vm.DeleteSelectedProfile();
+
+        Assert.False(File.Exists(path));
+        Assert.Equal(1, changed);
+        Assert.False(vm.CanDeleteProfile);
+    }
+
+    [Fact]
+    public async Task ResultsViewModel_ExportReport_WritesCsvAndPdf()
+    {
+        string dir = Path.Combine(Path.GetTempPath(), $"vs_export_{Guid.NewGuid():N}");
+        try
+        {
+            var vm = new ResultsViewModel(new AudioPlaybackController());
+            vm.ExportSettingsProvider = () => new ReportExportSettings("temp", "wespeaker-resnet34", "0.1.0", 0.48, 0.40, true, DateTimeOffset.UtcNow);
+
+            await vm.ExportReportAsync(dir);
+            Assert.False(Directory.Exists(dir)); // nothing to export yet
+
+            vm.AddResult(new FileVerdictResult("a.wav", "a.wav", "hash", 10.0, "No match", 0.1, []));
+            Assert.True(vm.HasResults);
+            await vm.ExportReportAsync(dir);
+
+            Assert.Single(Directory.GetFiles(dir, "*.csv"));
+            Assert.Single(Directory.GetFiles(dir, "*.pdf"));
+        }
+        finally
+        {
+            if (Directory.Exists(dir)) Directory.Delete(dir, true);
+        }
+    }
+
+    [Fact]
+    public void SetupCheck_ReportsOnlyMissingFiles()
+    {
+        var missing = SetupCheck.MissingModels();
+        Assert.All(missing, m => Assert.Null(AppPaths.FindModel(m)));
+        Assert.All(SetupCheck.RequiredModelFiles.Except(missing), m => Assert.NotNull(AppPaths.FindModel(m)));
     }
 
     [Fact]

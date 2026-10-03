@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=VoiceScan
+Comment=Find where a person speaks in your recordings (offline)
+Exec=VoiceScan
+Icon=voicescan
+Categories=AudioVideo;Audio;AudioVideoEditing;
+Terminal=false
+StartupWMClass=VoiceScan

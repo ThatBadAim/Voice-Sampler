@@ -17,14 +17,13 @@ public interface IReviewRepository : IDisposable
 public sealed class ReviewSqliteRepository : IReviewRepository
 {
     private readonly string _connectionString;
-    private readonly SqliteConnection _connection;
     private readonly ProfileEnrollmentService? _enrollmentService;
+    private readonly SemaphoreSlim _initLock = new(1, 1);
     private bool _initialized;
 
     public ReviewSqliteRepository(string dbPath = "voice_scan_reviews.db", ProfileEnrollmentService? enrollmentService = null)
     {
         _connectionString = $"Data Source={dbPath}";
-        _connection = new SqliteConnection(_connectionString);
         _enrollmentService = enrollmentService;
     }
 
@@ -32,32 +31,48 @@ public sealed class ReviewSqliteRepository : IReviewRepository
     {
         if (_initialized) return;
 
-        await _connection.OpenAsync();
+        await _initLock.WaitAsync();
+        try
+        {
+            if (_initialized) return;
 
-        string ddl = @"
-            CREATE TABLE IF NOT EXISTS review_decisions (
-                segment_id TEXT PRIMARY KEY,
-                file_path TEXT NOT NULL,
-                file_hash TEXT NOT NULL,
-                profile_name TEXT NOT NULL,
-                start_time REAL NOT NULL,
-                end_time REAL NOT NULL,
-                confidence REAL NOT NULL,
-                original_verdict TEXT NOT NULL,
-                reason_flags TEXT NOT NULL,
-                decision TEXT NOT NULL,
-                decided_at_utc TEXT NOT NULL,
-                notes TEXT,
-                embedding_json TEXT
-            );
+            using var connection = new SqliteConnection(_connectionString);
+            await connection.OpenAsync();
 
-            CREATE INDEX IF NOT EXISTS idx_reviews_profile ON review_decisions(profile_name);
-            CREATE INDEX IF NOT EXISTS idx_reviews_decision ON review_decisions(decision);
-        ";
+            using (var pragmaCmd = new SqliteCommand("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;", connection))
+            {
+                await pragmaCmd.ExecuteNonQueryAsync();
+            }
 
-        using var cmd = new SqliteCommand(ddl, _connection);
-        await cmd.ExecuteNonQueryAsync();
-        _initialized = true;
+            string ddl = @"
+                CREATE TABLE IF NOT EXISTS review_decisions (
+                    segment_id TEXT PRIMARY KEY,
+                    file_path TEXT NOT NULL,
+                    file_hash TEXT NOT NULL,
+                    profile_name TEXT NOT NULL,
+                    start_time REAL NOT NULL,
+                    end_time REAL NOT NULL,
+                    confidence REAL NOT NULL,
+                    original_verdict TEXT NOT NULL,
+                    reason_flags TEXT NOT NULL,
+                    decision TEXT NOT NULL,
+                    decided_at_utc TEXT NOT NULL,
+                    notes TEXT,
+                    embedding_json TEXT
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_reviews_profile ON review_decisions(profile_name);
+                CREATE INDEX IF NOT EXISTS idx_reviews_decision ON review_decisions(decision);
+            ";
+
+            using var cmd = new SqliteCommand(ddl, connection);
+            await cmd.ExecuteNonQueryAsync();
+            _initialized = true;
+        }
+        finally
+        {
+            _initLock.Release();
+        }
     }
 
     public async Task RecordDecisionAsync(ReviewDecisionRecord record, CancellationToken cancellationToken = default)
@@ -81,7 +96,10 @@ public sealed class ReviewSqliteRepository : IReviewRepository
                 embedding_json = excluded.embedding_json;
         ";
 
-        using var cmd = new SqliteCommand(sql, _connection);
+        using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync(cancellationToken);
+
+        using var cmd = new SqliteCommand(sql, connection);
         cmd.Parameters.AddWithValue("@segId", record.SegmentId);
         cmd.Parameters.AddWithValue("@filePath", record.FilePath);
         cmd.Parameters.AddWithValue("@fileHash", record.FileHash);
@@ -107,7 +125,10 @@ public sealed class ReviewSqliteRepository : IReviewRepository
             ? "SELECT * FROM review_decisions ORDER BY decided_at_utc DESC"
             : "SELECT * FROM review_decisions WHERE profile_name = @profile ORDER BY decided_at_utc DESC";
 
-        using var cmd = new SqliteCommand(sql, _connection);
+        using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync(cancellationToken);
+
+        using var cmd = new SqliteCommand(sql, connection);
         if (profileName != null)
         {
             cmd.Parameters.AddWithValue("@profile", profileName);
@@ -129,7 +150,10 @@ public sealed class ReviewSqliteRepository : IReviewRepository
         await InitializeAsync();
 
         string sql = "SELECT * FROM review_decisions WHERE decision = 'Rejected' AND embedding_json IS NOT NULL";
-        using var cmd = new SqliteCommand(sql, _connection);
+        using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync(cancellationToken);
+
+        using var cmd = new SqliteCommand(sql, connection);
         using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
 
         List<ReviewDecisionRecord> records = [];
@@ -216,6 +240,6 @@ public sealed class ReviewSqliteRepository : IReviewRepository
 
     public void Dispose()
     {
-        _connection.Dispose();
+        _initLock.Dispose();
     }
 }

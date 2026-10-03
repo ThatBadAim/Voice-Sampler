@@ -1,3 +1,4 @@
+using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
 using VoiceScan.App.Core.Models;
@@ -13,16 +14,40 @@ public sealed class EnrollmentWizardViewModel : INotifyPropertyChanged
 
     private EnrollmentStep _currentStep = EnrollmentStep.AudioSelection;
     private string? _selectedAudioPath;
-    private string _profileName = "TargetSpeaker";
-    private bool _multiCondition = true;
+    private string _profileName = string.Empty;
     private bool _hasConsent;
     private bool _isAnalyzing;
     private bool _isEnrolling;
     private AudioQualityReport? _qualityReport;
     private string? _statusMessage;
     private VoiceProfileSummary? _createdProfile;
+    private VoiceProfileSummary? _selectedProfile;
 
     public event PropertyChangedEventHandler? PropertyChanged;
+
+    /// <summary>Raised after a profile has been written to disk.</summary>
+    public event Action<VoiceProfileSummary>? ProfileCreated;
+
+    /// <summary>Raised after a saved voice was deleted.</summary>
+    public event Action? ProfilesChanged;
+
+    public ObservableCollection<VoiceProfileSummary> Profiles { get; } = [];
+
+    public bool HasProfiles => Profiles.Count > 0;
+
+    public VoiceProfileSummary? SelectedProfile
+    {
+        get => _selectedProfile;
+        set
+        {
+            if (SetField(ref _selectedProfile, value))
+            {
+                OnPropertyChanged(nameof(CanDeleteProfile));
+            }
+        }
+    }
+
+    public bool CanDeleteProfile => _selectedProfile is not null;
 
     public EnrollmentStep CurrentStep
     {
@@ -37,7 +62,14 @@ public sealed class EnrollmentWizardViewModel : INotifyPropertyChanged
         {
             if (SetField(ref _selectedAudioPath, value))
             {
+                QualityReport = null;
                 OnPropertyChanged(nameof(CanProceedFromAudioSelection));
+                OnPropertyChanged(nameof(CanProceedFromQuality));
+                OnPropertyChanged(nameof(CanCreateProfile));
+                if (string.IsNullOrWhiteSpace(_profileName) && !string.IsNullOrWhiteSpace(value))
+                {
+                    ProfileName = Path.GetFileNameWithoutExtension(value);
+                }
             }
         }
     }
@@ -54,12 +86,6 @@ public sealed class EnrollmentWizardViewModel : INotifyPropertyChanged
         }
     }
 
-    public bool MultiCondition
-    {
-        get => _multiCondition;
-        set => SetField(ref _multiCondition, value);
-    }
-
     public bool HasConsent
     {
         get => _hasConsent;
@@ -68,6 +94,7 @@ public sealed class EnrollmentWizardViewModel : INotifyPropertyChanged
             if (SetField(ref _hasConsent, value))
             {
                 OnPropertyChanged(nameof(CanProceedFromConsent));
+                OnPropertyChanged(nameof(CanCreateProfile));
             }
         }
     }
@@ -111,6 +138,38 @@ public sealed class EnrollmentWizardViewModel : INotifyPropertyChanged
     {
         _qualityAnalyzer = qualityAnalyzer;
         _enrollmentService = enrollmentService;
+        RefreshProfiles();
+    }
+
+    public void RefreshProfiles()
+    {
+        Profiles.Clear();
+        foreach (var profile in ProfileLibrary.List())
+        {
+            Profiles.Add(profile);
+        }
+        OnPropertyChanged(nameof(HasProfiles));
+        SelectedProfile = null;
+    }
+
+    /// <summary>Deletes the selected voice from disk.</summary>
+    public void DeleteSelectedProfile()
+    {
+        if (_selectedProfile is not { } profile) return;
+
+        try
+        {
+            ProfileLibrary.Delete(profile.Path);
+            StatusMessage = $"Deleted voice '{profile.Name}'.";
+        }
+        catch (IOException ex)
+        {
+            StatusMessage = $"Could not delete '{profile.Name}': {ex.Message}";
+            return;
+        }
+
+        RefreshProfiles();
+        ProfilesChanged?.Invoke();
     }
 
     public void MoveToStep(EnrollmentStep step)
@@ -168,7 +227,7 @@ public sealed class EnrollmentWizardViewModel : INotifyPropertyChanged
         }
     }
 
-    public async Task<VoiceProfileSummary?> CreateProfileAsync(string outputDir = "models/profiles", CancellationToken cancellationToken = default)
+    public async Task<VoiceProfileSummary?> CreateProfileAsync(string? outputDir = null, CancellationToken cancellationToken = default)
     {
         if (!CanCreateProfile || string.IsNullOrWhiteSpace(_selectedAudioPath))
         {
@@ -181,13 +240,15 @@ public sealed class EnrollmentWizardViewModel : INotifyPropertyChanged
 
         try
         {
+            outputDir ??= AppPaths.ProfilesDirectory;
             Directory.CreateDirectory(outputDir);
-            string outputPath = Path.Combine(outputDir, $"{_profileName}.json");
+            string safeName = string.Concat(_profileName.Trim().Select(c => Path.GetInvalidFileNameChars().Contains(c) ? '_' : c));
+            string outputPath = Path.Combine(outputDir, $"{safeName}.json");
 
             var profile = await _enrollmentService.EnrollProfileAsync(
                 audioFilePaths: [_selectedAudioPath],
                 profileName: _profileName,
-                multiCondition: _multiCondition,
+                multiCondition: false,
                 cancellationToken: cancellationToken);
 
             profile.SaveToFile(outputPath);
@@ -197,11 +258,12 @@ public sealed class EnrollmentWizardViewModel : INotifyPropertyChanged
                 Path: outputPath,
                 Dimension: profile.Centroid.Length,
                 WindowCount: profile.EnrollmentEmbeddings.Count,
-                CreatedAtUtc: DateTimeOffset.Parse(profile.CreatedAt),
-                MultiConditionAugmented: _multiCondition);
+                CreatedAtUtc: DateTimeOffset.Parse(profile.CreatedAt));
 
+            RefreshProfiles();
             CurrentStep = EnrollmentStep.Complete;
-            StatusMessage = $"Profile '{_profileName}' successfully enrolled ({profile.EnrollmentEmbeddings.Count} speech windows, {profile.Centroid.Length} dimensions).";
+            StatusMessage = $"Profile '{_profileName}' is ready ({profile.EnrollmentEmbeddings.Count} voice samples).";
+            ProfileCreated?.Invoke(CreatedProfile);
             return CreatedProfile;
         }
         catch (Exception ex)
@@ -219,6 +281,7 @@ public sealed class EnrollmentWizardViewModel : INotifyPropertyChanged
     {
         CurrentStep = EnrollmentStep.AudioSelection;
         SelectedAudioPath = null;
+        ProfileName = string.Empty;
         HasConsent = false;
         QualityReport = null;
         CreatedProfile = null;

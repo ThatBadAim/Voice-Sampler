@@ -1,0 +1,101 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:VoiceScan.App.Core.ViewModels"
+             xmlns:m="using:VoiceScan.App.Core.Models"
+             xmlns:svc="using:VoiceScan.App.Services"
+             x:Class="VoiceScan.App.Views.ReviewView"
+             x:DataType="vm:ReviewViewModel">
+
+    <Grid ColumnDefinitions="380,20,*">
+        <Border Classes="card" Padding="12">
+            <DockPanel>
+                <TextBlock DockPanel.Dock="Top" Text="Review Queue" Classes="heading" Margin="0,0,0,8" />
+                <ListBox ItemsSource="{Binding PendingQueue}" SelectedItem="{Binding SelectedItem}">
+                    <ListBox.ItemTemplate>
+                        <DataTemplate x:DataType="m:ReviewQueueItem">
+                            <StackPanel Spacing="2">
+                                <TextBlock Text="{Binding FileName}" TextTrimming="CharacterEllipsis" />
+                                <StackPanel Orientation="Horizontal" Spacing="8">
+                                    <TextBlock Text="{Binding Segment.StartTimeSeconds, StringFormat={}{0:F1}s}" Classes="secondary" />
+                                    <Border Classes="badge" Background="{Binding Segment.Verdict, Converter={x:Static svc:VerdictConverters.Background}}"><TextBlock Text="{Binding Segment.Verdict}" Foreground="{Binding Segment.Verdict, Converter={x:Static svc:VerdictConverters.Foreground}}" /></Border>
+                                    <TextBlock Text="{Binding Segment.Confidence, StringFormat={}{0:F3}}" Classes="secondary" />
+                                </StackPanel>
+                            </StackPanel>
+                        </DataTemplate>
+                    </ListBox.ItemTemplate>
+                </ListBox>
+            </DockPanel>
+        </Border>
+
+        <ScrollViewer Grid.Column="2">
+            <StackPanel Spacing="20">
+                <Border Classes="card">
+                    <StackPanel Spacing="12">
+                        <TextBlock Classes="heading" TextWrapping="Wrap"
+                                   Text="{Binding SelectedItem.FileName, FallbackValue='Select a segment from the review queue.', TargetNullValue='Select a segment from the review queue.'}" />
+                        <StackPanel Orientation="Horizontal" Spacing="16" IsVisible="{Binding HasSelectedItem}">
+                            <TextBlock Text="{Binding SelectedItem.Segment.StartTimeSeconds, StringFormat='{}{0:F1}s'}" />
+                            <TextBlock Text="{Binding SelectedItem.Segment.EndTimeSeconds, StringFormat='– {0:F1}s'}" />
+                            <TextBlock Text="{Binding SelectedItem.ProfileName, StringFormat='Target: {0}'}" Classes="secondary" VerticalAlignment="Center" />
+                            <TextBlock Text="{Binding SelectedItem.Segment.Confidence, StringFormat='Confidence {0:F3}'}" FontWeight="SemiBold" />
+                        </StackPanel>
+                        <ItemsControl ItemsSource="{Binding SelectedItem.Segment.ReasonFlags}">
+                            <ItemsControl.ItemsPanel>
+                                <ItemsPanelTemplate><WrapPanel /></ItemsPanelTemplate>
+                            </ItemsControl.ItemsPanel>
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate x:DataType="x:String">
+                                    <Border Classes="badge" Background="{DynamicResource VerdictPossibleSoftBrush}" Margin="0,0,6,6">
+                                        <TextBlock Text="{Binding}" Foreground="{DynamicResource VerdictPossibleBrush}" />
+                                    </Border>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                        <Button HorizontalAlignment="Left" Click="PlaySnippet_Click" IsEnabled="{Binding CanPlaySnippet}"
+                                ToolTip.Tip="Audio playback needs ffplay (install ffmpeg) on PATH.">
+                            <StackPanel Orientation="Horizontal" Spacing="8">
+                                <PathIcon Data="{StaticResource IconPlay}" />
+                                <TextBlock Text="Play snippet" />
+                            </StackPanel>
+                        </Button>
+                        <TextBox Text="{Binding ReviewerNotes}" PlaceholderText="Reviewer notes (optional)" AcceptsReturn="True" MinHeight="60" TextWrapping="Wrap" />
+                        <CheckBox Content="Add confirmed segment to voice profile" IsChecked="{Binding AddToProfileOnConfirm}" />
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <Button Classes="accent" Click="Confirm_Click" IsEnabled="{Binding CanAct}">
+                            <StackPanel Orientation="Horizontal" Spacing="8">
+                                <PathIcon Data="{StaticResource IconCheck}" />
+                                <TextBlock Text="Confirm" />
+                            </StackPanel>
+                        </Button>
+                            <Button Click="Reject_Click" IsEnabled="{Binding CanAct}">
+                            <StackPanel Orientation="Horizontal" Spacing="8">
+                                <PathIcon Data="{StaticResource IconClose}" />
+                                <TextBlock Text="Reject" />
+                            </StackPanel>
+                        </Button>
+                        </StackPanel>
+                        <TextBlock Text="{Binding StatusMessage}" Classes="secondary" TextWrapping="Wrap" />
+                    </StackPanel>
+                </Border>
+
+                <Border Classes="card">
+                    <StackPanel Spacing="8">
+                        <TextBlock Text="Decision History" Classes="heading" />
+                        <ItemsControl ItemsSource="{Binding DecisionHistory}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate x:DataType="m:ReviewDecisionRecord">
+                                    <Grid ColumnDefinitions="100,*,90,160" Margin="0,3">
+                                        <TextBlock Text="{Binding Decision}" FontWeight="SemiBold" />
+                                        <TextBlock Grid.Column="1" Text="{Binding FilePath}" TextTrimming="CharacterEllipsis" Classes="secondary" />
+                                        <TextBlock Grid.Column="2" Text="{Binding StartTimeSeconds, StringFormat={}{0:F1}s}" />
+                                        <TextBlock Grid.Column="3" Text="{Binding DecidedAtUtc, StringFormat={}{0:yyyy-MM-dd HH:mm}}" Classes="secondary" />
+                                    </Grid>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </StackPanel>
+                </Border>
+            </StackPanel>
+        </ScrollViewer>
+    </Grid>
+</UserControl>

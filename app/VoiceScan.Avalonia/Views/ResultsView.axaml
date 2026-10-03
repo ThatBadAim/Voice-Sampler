@@ -1,0 +1,85 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:VoiceScan.App.Core.ViewModels"
+             xmlns:m="using:VoiceScan.App.Core.Models"
+             xmlns:c="using:VoiceScan.App.Controls"
+             xmlns:svc="using:VoiceScan.App.Services"
+             x:Class="VoiceScan.App.Views.ResultsView"
+             x:DataType="vm:ResultsViewModel">
+
+    <Grid ColumnDefinitions="360,20,*">
+        <Border Classes="card" Padding="12">
+            <DockPanel>
+                <StackPanel DockPanel.Dock="Top" Spacing="8" Margin="0,0,0,8">
+                    <TextBlock Text="Results" Classes="heading" />
+                    <TextBox Text="{Binding SearchQuery}" PlaceholderText="Search files…" />
+                    <Grid ColumnDefinitions="*,*" ColumnSpacing="8">
+                        <ComboBox x:Name="FilterCombo" HorizontalAlignment="Stretch" SelectedItem="{Binding SelectedFilter}" />
+                        <ComboBox x:Name="SortCombo" Grid.Column="1" HorizontalAlignment="Stretch" SelectedItem="{Binding SelectedSort}" />
+                    </Grid>
+                    <CheckBox Content="Descending" IsChecked="{Binding SortDescending}" />
+                    <Button Content="Export report…" Click="Export_Click" HorizontalAlignment="Stretch"
+                            IsEnabled="{Binding HasResults}"
+                            ToolTip.Tip="Saves a CSV, a PDF and the matching audio clips." />
+                    <TextBlock Text="{Binding ExportStatus}" Classes="secondary" TextWrapping="Wrap" />
+                </StackPanel>
+                <ListBox ItemsSource="{Binding FilteredFiles}" SelectedItem="{Binding SelectedFile}">
+                    <ListBox.ItemTemplate>
+                        <DataTemplate x:DataType="m:FileVerdictResult">
+                            <StackPanel Spacing="2">
+                                <TextBlock Text="{Binding FileName}" TextTrimming="CharacterEllipsis" />
+                                <StackPanel Orientation="Horizontal" Spacing="8">
+                                    <Border Classes="badge" Background="{Binding OverallVerdict, Converter={x:Static svc:VerdictConverters.Background}}">
+                                        <TextBlock Text="{Binding OverallVerdict}" Foreground="{Binding OverallVerdict, Converter={x:Static svc:VerdictConverters.Foreground}}" />
+                                    </Border>
+                                    <TextBlock Text="{Binding MaxConfidence, StringFormat={}{0:P0}}" Classes="secondary" />
+                                </StackPanel>
+                            </StackPanel>
+                        </DataTemplate>
+                    </ListBox.ItemTemplate>
+                </ListBox>
+            </DockPanel>
+        </Border>
+
+        <Border Grid.Column="2" Classes="card" IsVisible="{Binding HasSelectedFile}">
+            <DockPanel>
+                <StackPanel DockPanel.Dock="Top" Spacing="4" Margin="0,0,0,12">
+                    <TextBlock Text="{Binding SelectedFile.FileName}" Classes="title" FontSize="20" TextTrimming="CharacterEllipsis" />
+                    <TextBlock Text="{Binding SelectedFile.FilePath}" Classes="secondary" TextTrimming="CharacterEllipsis" />
+                    <Border HorizontalAlignment="Left" Classes="badge" Background="{Binding SelectedFile.OverallVerdict, Converter={x:Static svc:VerdictConverters.Background}}"><TextBlock Text="{Binding SelectedFile.OverallVerdict}" Foreground="{Binding SelectedFile.OverallVerdict, Converter={x:Static svc:VerdictConverters.Foreground}}" /></Border>
+                </StackPanel>
+
+                <StackPanel DockPanel.Dock="Top" Spacing="8" Margin="0,0,0,12">
+                    <c:WaveformTimelineControl x:Name="Timeline" />
+                    <StackPanel Orientation="Horizontal" Spacing="12">
+                        <Button x:Name="PlayPauseButton" Classes="accent" Click="PlayPause_Click"
+                                IsEnabled="{Binding IsAudioAvailable}"
+                                ToolTip.Tip="Audio playback needs ffplay (install ffmpeg) on PATH.">
+                            <StackPanel Orientation="Horizontal" Spacing="8">
+                                <PathIcon x:Name="PlayPauseIcon" Data="{StaticResource IconPlay}" />
+                                <TextBlock x:Name="PlayPauseText" Text="Play" />
+                            </StackPanel>
+                        </Button>
+                        <TextBlock x:Name="PositionText" Text="00:00 / 00:00" VerticalAlignment="Center" />
+                    </StackPanel>
+                </StackPanel>
+
+                <ListBox x:Name="SegmentsList" ItemsSource="{Binding SelectedFile.Segments}" SelectionChanged="Segments_SelectionChanged">
+                    <ListBox.ItemTemplate>
+                        <DataTemplate x:DataType="m:HitSegmentResult">
+                            <Grid ColumnDefinitions="140,90,80,*">
+                                <TextBlock Text="{Binding StartTimeSeconds, StringFormat={}{0:F1}s}" />
+                                <Border Grid.Column="1" Classes="badge" HorizontalAlignment="Left" Background="{Binding Verdict, Converter={x:Static svc:VerdictConverters.Background}}"><TextBlock Text="{Binding Verdict}" Foreground="{Binding Verdict, Converter={x:Static svc:VerdictConverters.Foreground}}" /></Border>
+                                <TextBlock Grid.Column="2" Text="{Binding Confidence, StringFormat={}{0:F3}}" />
+                                <TextBlock Grid.Column="3" Text="{Binding DurationSeconds, StringFormat={}{0:F1}s long}" Classes="secondary" />
+                            </Grid>
+                        </DataTemplate>
+                    </ListBox.ItemTemplate>
+                </ListBox>
+            </DockPanel>
+        </Border>
+
+        <TextBlock Grid.Column="2" Text="Scan some recordings, then select a file to see where the voice appears." Classes="subtitle"
+                   IsVisible="{Binding !HasSelectedFile}" HorizontalAlignment="Center" VerticalAlignment="Center" />
+    </Grid>
+</UserControl>

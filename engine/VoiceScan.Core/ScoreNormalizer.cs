@@ -138,6 +138,25 @@ public sealed class ScoreNormalizer
     }
 
     /// <summary>
+    /// Computes the AS-Norm z-score using precomputed target cohort statistics.
+    /// Avoids re-sorting and scanning the cohort repeatedly when scoring many windows against the same target.
+    /// </summary>
+    public double NormalizeScoreWithTargetStats(float rawCosineScore, (double Mean, double StdDev) targetStats, float[] testEmbedding)
+    {
+        if (_cohort.Count < 2)
+        {
+            return rawCosineScore;
+        }
+
+        var (muTest, sigmaTest) = ComputeCohortStats(testEmbedding);
+
+        double zTarget = (rawCosineScore - targetStats.Mean) / targetStats.StdDev;
+        double zTest = (rawCosineScore - muTest) / sigmaTest;
+
+        return 0.5 * (zTarget + zTest);
+    }
+
+    /// <summary>
     /// Calibrates an AS-Norm z-score back into a standardized [0.0, 1.0] probability-like confidence scale.
     /// Using standard logistic sigmoid: 1 / (1 + exp(-0.8 * (z - z_center)))
     /// where z_center = 2.0 (representing a standard ~2-sigma significance boundary).

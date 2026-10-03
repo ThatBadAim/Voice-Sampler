@@ -15,7 +15,7 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "app", "app", "{F95F473B-E98
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "VoiceScan.App.Core", "app\VoiceScan.App.Core\VoiceScan.App.Core.csproj", "{437C9D69-5533-4605-953A-791C8592D96C}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "VoiceScan.App", "app\VoiceScan.App\VoiceScan.App.csproj", "{BA0E2340-56B5-4D98-8968-FB1C7F53DE52}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "VoiceScan.Avalonia", "app\VoiceScan.Avalonia\VoiceScan.Avalonia.csproj", "{BA0E2340-56B5-4D98-8968-FB1C7F53DE52}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution

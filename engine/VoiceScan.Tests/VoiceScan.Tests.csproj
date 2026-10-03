@@ -19,6 +19,11 @@
   </ItemGroup>
 
   <ItemGroup>
+    <None Update="fbank_golden.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Update="fixtures\jfk_speech.wav" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\VoiceScan.Core\VoiceScan.Core.csproj" />
     <ProjectReference Include="..\..\app\VoiceScan.App.Core\VoiceScan.App.Core.csproj" />
   </ItemGroup>

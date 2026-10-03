@@ -21,17 +21,7 @@ public sealed record ExportResult(
     IReadOnlyList<string> ExtractedAudioClipPaths,
     int TotalSegmentsExported);
 
-public interface IEvidenceReportExporter
-{
-    Task<ExportResult> ExportReportAsync(
-        IReadOnlyList<FileVerdictResult> results,
-        ReportExportSettings settings,
-        string outputDirectory,
-        bool extractAudioClips = true,
-        CancellationToken cancellationToken = default);
-}
-
-public sealed class EvidenceReportExporter : IEvidenceReportExporter
+public sealed class EvidenceReportExporter
 {
     public async Task<ExportResult> ExportReportAsync(
         IReadOnlyList<FileVerdictResult> results,
@@ -77,42 +67,32 @@ public sealed class EvidenceReportExporter : IEvidenceReportExporter
                 continue;
             }
 
-            // Extract audio samples if audio extraction requested
-            float[]? fileAudio = null;
-            if (extractAudioClips && File.Exists(file.FilePath))
-            {
-                try
-                {
-                    fileAudio = await AudioDecoder.DecodeEntireFileAsync(file.FilePath, cancellationToken: cancellationToken);
-                }
-                catch
-                {
-                    fileAudio = null;
-                }
-            }
-
             for (int s = 0; s < file.Segments.Count; s++)
             {
                 var seg = file.Segments[s];
                 segmentCount++;
                 string clipRelPath = "";
 
-                if (extractAudioClips && fileAudio != null && fileAudio.Length > 0)
+                if (extractAudioClips && File.Exists(file.FilePath) && seg.DurationSeconds > 0)
                 {
                     string clipFileName = $"{Path.GetFileNameWithoutExtension(file.FileName)}_seg_{s + 1}_{seg.StartTimeSeconds:F1}s_{seg.EndTimeSeconds:F1}s.wav";
                     string clipFullPath = Path.Combine(audioHitsDir, clipFileName);
 
-                    int startSample = Math.Clamp((int)(seg.StartTimeSeconds * 16000), 0, fileAudio.Length);
-                    int endSample = Math.Clamp((int)(seg.EndTimeSeconds * 16000), startSample, fileAudio.Length);
-                    int sampleLen = endSample - startSample;
-
-                    if (sampleLen > 0)
+                    try
                     {
-                        float[] clipSamples = new float[sampleLen];
-                        Array.Copy(fileAudio, startSample, clipSamples, 0, sampleLen);
-                        await WriteWavFileAsync(clipFullPath, clipSamples, 16000, cancellationToken);
+                        await AudioDecoder.ExtractAudioSegmentAsync(
+                            file.FilePath,
+                            clipFullPath,
+                            seg.StartTimeSeconds,
+                            seg.DurationSeconds,
+                            cancellationToken: cancellationToken);
+
                         clipRelPath = Path.Combine("audio_hits", clipFileName);
                         exportedAudioClips.Add(clipFullPath);
+                    }
+                    catch (Exception ex)
+                    {
+                        VoiceScan.Core.Logging.VoiceScanLogger.Warn("EvidenceReportExporter", $"Failed to extract clip {clipFileName}: {ex.Message}");
                     }
                 }
 
@@ -135,50 +115,6 @@ public sealed class EvidenceReportExporter : IEvidenceReportExporter
         return new ExportResult(csvPath, pdfPath, exportedAudioClips, segmentCount);
     }
 
-    private static async Task WriteWavFileAsync(string filePath, float[] samples, int sampleRate, CancellationToken cancellationToken)
-    {
-        short channels = 1;
-        short bitsPerSample = 16;
-        int byteRate = sampleRate * channels * (bitsPerSample / 8);
-        short blockAlign = (short)(channels * (bitsPerSample / 8));
-        int subChunk2Size = samples.Length * (bitsPerSample / 8);
-        int chunkSize = 36 + subChunk2Size;
-
-        using var fs = new FileStream(filePath, FileMode.Create, FileAccess.Write, FileShare.None, 4096, true);
-        using var bw = new BinaryWriter(fs);
-
-        // RIFF chunk
-        bw.Write(Encoding.ASCII.GetBytes("RIFF"));
-        bw.Write(chunkSize);
-        bw.Write(Encoding.ASCII.GetBytes("WAVE"));
-
-        // fmt chunk
-        bw.Write(Encoding.ASCII.GetBytes("fmt "));
-        bw.Write(16); // subchunk1 size
-        bw.Write((short)1); // PCM
-        bw.Write(channels);
-        bw.Write(sampleRate);
-        bw.Write(byteRate);
-        bw.Write(blockAlign);
-        bw.Write(bitsPerSample);
-
-        // data chunk
-        bw.Write(Encoding.ASCII.GetBytes("data"));
-        bw.Write(subChunk2Size);
-
-        // Convert float -1.0..1.0 to 16-bit PCM
-        byte[] buffer = new byte[samples.Length * 2];
-        for (int i = 0; i < samples.Length; i++)
-        {
-            float s = Math.Clamp(samples[i], -1.0f, 1.0f);
-            short sample16 = (short)(s * 32767.0f);
-            buffer[i * 2] = (byte)(sample16 & 0xFF);
-            buffer[i * 2 + 1] = (byte)((sample16 >> 8) & 0xFF);
-        }
-
-        await fs.WriteAsync(buffer, 0, buffer.Length, cancellationToken);
-    }
-
     private static async Task GeneratePdfReportAsync(
         string pdfPath,
         IReadOnlyList<FileVerdictResult> results,
@@ -188,25 +124,25 @@ public sealed class EvidenceReportExporter : IEvidenceReportExporter
         // Generates compliant PDF 1.4 document
         var contentStream = new StringBuilder();
 
+        void DrawText(double x, double y, string font, double size, string text, string rgb = "0 0 0")
+        {
+            contentStream.AppendLine("BT");
+            contentStream.AppendLine(string.Format(CultureInfo.InvariantCulture, "/{0} {1:F1} Tf", font, size));
+            contentStream.AppendLine($"{rgb} rg");
+            contentStream.AppendLine(string.Format(CultureInfo.InvariantCulture, "{0:F1} {1:F1} Td", x, y));
+            contentStream.AppendLine($"({EscapePdf(text)}) Tj");
+            contentStream.AppendLine("ET");
+        }
+
         // Background header banner
         contentStream.AppendLine("0.05 0.10 0.18 rg");
         contentStream.AppendLine("36 760 523 50 re f");
 
         // Header Title
-        contentStream.AppendLine("BT");
-        contentStream.AppendLine("/F2 18 Tf");
-        contentStream.AppendLine("1.0 1.0 1.0 rg");
-        contentStream.AppendLine("50 780 Td");
-        contentStream.AppendLine("(VoiceScan Biometric Evidence Report) Tj");
-        contentStream.AppendLine("ET");
+        DrawText(50, 780, "F2", 18, "VoiceScan Biometric Evidence Report", "1.0 1.0 1.0");
 
         // Subtitle & Metadata
-        contentStream.AppendLine("BT");
-        contentStream.AppendLine("/F1 9 Tf");
-        contentStream.AppendLine("0.8 0.8 0.8 rg");
-        contentStream.AppendLine("50 766 Td");
-        contentStream.AppendLine($"(Generated: {settings.ScanDateUtc:yyyy-MM-dd HH:mm:ss} UTC  |  Engine v{settings.EngineVersion}  |  100% Offline Biometrics) Tj");
-        contentStream.AppendLine("ET");
+        DrawText(50, 766, "F1", 9, $"Generated: {settings.ScanDateUtc:yyyy-MM-dd HH:mm:ss} UTC  |  Engine v{settings.EngineVersion}  |  100% Offline Biometrics", "0.8 0.8 0.8");
 
         // Overview Box
         contentStream.AppendLine("0.95 0.95 0.95 rg");
@@ -214,42 +150,25 @@ public sealed class EvidenceReportExporter : IEvidenceReportExporter
         contentStream.AppendLine("0.80 0.80 0.80 RG");
         contentStream.AppendLine("36 675 523 70 re S");
 
-        contentStream.AppendLine("BT");
-        contentStream.AppendLine("/F2 10 Tf");
-        contentStream.AppendLine("0.1 0.1 0.1 rg");
-        contentStream.AppendLine("50 725 Td");
-        contentStream.AppendLine($"(TARGET PROFILE: {EscapePdf(settings.ProfileName)}) Tj");
-        contentStream.AppendLine("/F1 9 Tf");
-        contentStream.AppendLine("0 600 Td");
-        contentStream.AppendLine("50 710 Td");
-        contentStream.AppendLine($"(Model ID: {EscapePdf(settings.ModelId)}   |   Score Threshold: {settings.Threshold:F2}   |   Cluster Dist Threshold: {settings.ClusterThreshold:F2}) Tj");
-        contentStream.AppendLine("50 695 Td");
+        DrawText(50, 725, "F2", 10, $"TARGET PROFILE: {settings.ProfileName}", "0.1 0.1 0.1");
+        DrawText(50, 710, "F1", 9, $"Model ID: {settings.ModelId}   |   Score Threshold: {settings.Threshold:F2}   |   Cluster Dist Threshold: {settings.ClusterThreshold:F2}", "0.2 0.2 0.2");
+
         int matchFiles = results.Count(r => r.OverallVerdict.Equals("Match", StringComparison.OrdinalIgnoreCase));
         int possibleFiles = results.Count(r => r.OverallVerdict.Equals("Possible", StringComparison.OrdinalIgnoreCase));
         int noMatchFiles = results.Count(r => r.OverallVerdict.Equals("No match", StringComparison.OrdinalIgnoreCase));
         int totalSegments = results.Sum(r => r.Segments.Count);
-        contentStream.AppendLine($"(Files Scanned: {results.Count}   |   Matches: {matchFiles}   |   Possible: {possibleFiles}   |   No Match: {noMatchFiles}   |   Total Hits: {totalSegments}) Tj");
-        contentStream.AppendLine("ET");
+        DrawText(50, 695, "F1", 9, $"Files Scanned: {results.Count}   |   Matches: {matchFiles}   |   Possible: {possibleFiles}   |   No Match: {noMatchFiles}   |   Total Hits: {totalSegments}", "0.2 0.2 0.2");
 
         // Table Header
         double y = 645;
         contentStream.AppendLine("0.15 0.25 0.35 rg");
-        contentStream.AppendLine($"36 {y} 523 20 re f");
+        contentStream.AppendLine(string.Format(CultureInfo.InvariantCulture, "36 {0:F1} 523 20 re f", y));
 
-        contentStream.AppendLine("BT");
-        contentStream.AppendLine("/F2 9 Tf");
-        contentStream.AppendLine("1.0 1.0 1.0 rg");
-        contentStream.AppendLine($"42 {y + 6} Td");
-        contentStream.AppendLine("(File Name) Tj");
-        contentStream.AppendLine($"170 {y + 6} Td");
-        contentStream.AppendLine("(Verdict) Tj");
-        contentStream.AppendLine($"240 {y + 6} Td");
-        contentStream.AppendLine("(Interval) Tj");
-        contentStream.AppendLine($"330 {y + 6} Td");
-        contentStream.AppendLine("(Confidence) Tj");
-        contentStream.AppendLine($"400 {y + 6} Td");
-        contentStream.AppendLine("(Reason Flags) Tj");
-        contentStream.AppendLine("ET");
+        DrawText(42, y + 6, "F2", 9, "File Name", "1.0 1.0 1.0");
+        DrawText(170, y + 6, "F2", 9, "Verdict", "1.0 1.0 1.0");
+        DrawText(240, y + 6, "F2", 9, "Interval", "1.0 1.0 1.0");
+        DrawText(330, y + 6, "F2", 9, "Confidence", "1.0 1.0 1.0");
+        DrawText(400, y + 6, "F2", 9, "Reason Flags", "1.0 1.0 1.0");
 
         // Table Rows
         y -= 18;
@@ -259,21 +178,12 @@ public sealed class EvidenceReportExporter : IEvidenceReportExporter
 
             if (file.Segments.Count == 0)
             {
-                contentStream.AppendLine($"0.97 0.97 0.97 rg 36 {y - 2} 523 16 re f");
-                contentStream.AppendLine("BT");
-                contentStream.AppendLine("/F1 8 Tf");
-                contentStream.AppendLine("0.2 0.2 0.2 rg");
-                contentStream.AppendLine($"42 {y + 2} Td");
-                contentStream.AppendLine($"({EscapePdf(Truncate(file.FileName, 22))}) Tj");
-                contentStream.AppendLine($"170 {y + 2} Td");
-                contentStream.AppendLine($"({file.OverallVerdict}) Tj");
-                contentStream.AppendLine($"240 {y + 2} Td");
-                contentStream.AppendLine($"(--) Tj");
-                contentStream.AppendLine($"330 {y + 2} Td");
-                contentStream.AppendLine($"({file.MaxConfidence:F3}) Tj");
-                contentStream.AppendLine($"400 {y + 2} Td");
-                contentStream.AppendLine("(None) Tj");
-                contentStream.AppendLine("ET");
+                contentStream.AppendLine(string.Format(CultureInfo.InvariantCulture, "0.97 0.97 0.97 rg 36 {0:F1} 523 16 re f", y - 2));
+                DrawText(42, y + 2, "F1", 8, Truncate(file.FileName, 22), "0.2 0.2 0.2");
+                DrawText(170, y + 2, "F1", 8, file.OverallVerdict, "0.2 0.2 0.2");
+                DrawText(240, y + 2, "F1", 8, "--", "0.2 0.2 0.2");
+                DrawText(330, y + 2, "F1", 8, file.MaxConfidence.ToString("F3", CultureInfo.InvariantCulture), "0.2 0.2 0.2");
+                DrawText(400, y + 2, "F1", 8, "(None)", "0.2 0.2 0.2");
                 y -= 18;
                 continue;
             }
@@ -284,44 +194,31 @@ public sealed class EvidenceReportExporter : IEvidenceReportExporter
 
                 // Color verdict
                 if (seg.Verdict.Equals("Match", StringComparison.OrdinalIgnoreCase))
-                    contentStream.AppendLine($"0.90 0.97 0.92 rg 36 {y - 2} 523 16 re f");
+                    contentStream.AppendLine(string.Format(CultureInfo.InvariantCulture, "0.90 0.97 0.92 rg 36 {0:F1} 523 16 re f", y - 2));
                 else
-                    contentStream.AppendLine($"0.98 0.95 0.90 rg 36 {y - 2} 523 16 re f");
+                    contentStream.AppendLine(string.Format(CultureInfo.InvariantCulture, "0.98 0.95 0.90 rg 36 {0:F1} 523 16 re f", y - 2));
 
                 string flagsStr = seg.ReasonFlags.Count > 0 ? string.Join(", ", seg.ReasonFlags) : "Clean";
 
-                contentStream.AppendLine("BT");
-                contentStream.AppendLine("/F1 8 Tf");
-                contentStream.AppendLine("0.1 0.1 0.1 rg");
-                contentStream.AppendLine($"42 {y + 2} Td");
-                contentStream.AppendLine($"({EscapePdf(Truncate(file.FileName, 22))}) Tj");
-                contentStream.AppendLine($"170 {y + 2} Td");
-                contentStream.AppendLine($"({seg.Verdict}) Tj");
-                contentStream.AppendLine($"240 {y + 2} Td");
-                contentStream.AppendLine($"({seg.StartTimeSeconds:F1}s - {seg.EndTimeSeconds:F1}s) Tj");
-                contentStream.AppendLine($"330 {y + 2} Td");
-                contentStream.AppendLine($"({seg.Confidence:F3}) Tj");
-                contentStream.AppendLine($"400 {y + 2} Td");
-                contentStream.AppendLine($"({EscapePdf(flagsStr)}) Tj");
-                contentStream.AppendLine("ET");
+                DrawText(42, y + 2, "F1", 8, Truncate(file.FileName, 22), "0.1 0.1 0.1");
+                DrawText(170, y + 2, "F1", 8, seg.Verdict, "0.1 0.1 0.1");
+                DrawText(240, y + 2, "F1", 8, string.Format(CultureInfo.InvariantCulture, "{0:F1}s - {1:F1}s", seg.StartTimeSeconds, seg.EndTimeSeconds), "0.1 0.1 0.1");
+                DrawText(330, y + 2, "F1", 8, seg.Confidence.ToString("F3", CultureInfo.InvariantCulture), "0.1 0.1 0.1");
+                DrawText(400, y + 2, "F1", 8, flagsStr, "0.1 0.1 0.1");
 
                 y -= 18;
             }
         }
 
         // Footer Legal & Offline statement
-        contentStream.AppendLine("BT");
-        contentStream.AppendLine("/F1 8 Tf");
-        contentStream.AppendLine("0.5 0.5 0.5 rg");
-        contentStream.AppendLine("36 30 Td");
-        contentStream.AppendLine("(CONFIDENTIAL & BIOMETRICALLY VERIFIED  |  VoiceScan Offline Engine  |  Zero Network Telemetry) Tj");
-        contentStream.AppendLine("ET");
+        DrawText(36, 30, "F1", 8, "CONFIDENTIAL & BIOMETRICALLY VERIFIED  |  VoiceScan Offline Engine  |  Zero Network Telemetry", "0.5 0.5 0.5");
 
         byte[] streamBytes = Encoding.ASCII.GetBytes(contentStream.ToString());
 
         // Assemble PDF 1.4 Object Structure
         var pdf = new MemoryStream();
         using var writer = new StreamWriter(pdf, Encoding.ASCII, leaveOpen: true);
+        writer.AutoFlush = true;
 
         writer.WriteLine("%PDF-1.4");
         writer.WriteLine("%\xE2\xE3\xCF\xD3");

@@ -1,9 +1,7 @@
-# VoiceScan Application (WinUI 3)
+# VoiceScan Application (Avalonia)
 
-Placeholder directory for the Windows desktop interface (Phase 3 / Prompt 9).
-Will contain the WinUI 3 project implementing:
-- Voice enrollment wizard with explicit consent step and audio quality diagnostics.
-- Scan dashboard with realtime progress, GPU utilization, and cancellation support.
-- Waveform timeline with Match / Possible / No match hit segment markers and click-to-play.
-- Review queue for confirming/rejecting segments into SQLite.
-- Benchmark and evidence reporting screens.
+- `VoiceScan.Avalonia/`: Avalonia UI 12 desktop app (Windows + Linux): guided first-run setup, voice enrollment with explicit consent, scan, results waveform timeline, review queue.
+- `VoiceScan.App.Core/`: UI-framework-neutral view models and services.
+
+Run: `dotnet run --project app/VoiceScan.Avalonia` (needs `ffmpeg` and `ffplay` on PATH).
+GPU: add `-p:VoiceScanGpu=true` (CUDA 12 + cuDNN 9).

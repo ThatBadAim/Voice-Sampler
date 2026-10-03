@@ -1,0 +1,82 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:VoiceScan.App.Core.ViewModels"
+        xmlns:views="using:VoiceScan.App.Views"
+        x:Class="VoiceScan.App.MainWindow"
+        x:DataType="vm:MainAppViewModel"
+        Title="{Binding WindowTitle}"
+        Width="1280" Height="820" MinWidth="960" MinHeight="600"
+        TransparencyLevelHint="Mica,AcrylicBlur,None"
+        Background="{DynamicResource WindowBackgroundBrush}">
+
+    <Window.DataTemplates>
+        <DataTemplate DataType="vm:ScanDashboardViewModel"><views:ScanDashboardView /></DataTemplate>
+        <DataTemplate DataType="vm:ResultsViewModel"><views:ResultsView /></DataTemplate>
+        <DataTemplate DataType="vm:ReviewViewModel"><views:ReviewView /></DataTemplate>
+        <DataTemplate DataType="vm:EnrollmentWizardViewModel"><views:EnrollmentWizardView /></DataTemplate>
+    </Window.DataTemplates>
+
+    <DockPanel>
+        <Border DockPanel.Dock="Left" Width="236" Padding="12"
+                Background="{DynamicResource SidebarBrush}"
+                BorderBrush="{DynamicResource SurfaceCardBorderBrush}" BorderThickness="0,0,1,0">
+            <DockPanel>
+                <StackPanel DockPanel.Dock="Bottom" Spacing="10" Margin="0,8,0,0">
+                    <Border Classes="divider" />
+                    <Button Classes="nav" Click="ThemeToggle_Click">
+                        <StackPanel Orientation="Horizontal" Spacing="12">
+                            <PathIcon Data="{StaticResource IconTheme}" />
+                            <TextBlock Text="Toggle theme" />
+                        </StackPanel>
+                    </Button>
+                    <StackPanel Orientation="Horizontal" Spacing="6" HorizontalAlignment="Center">
+                        <PathIcon Data="{StaticResource IconLock}" Width="12" Height="12"
+                                  Foreground="{DynamicResource VerdictMatchBrush}" />
+                        <TextBlock Classes="secondary" Text="100% offline runtime" />
+                    </StackPanel>
+                </StackPanel>
+                <StackPanel Spacing="2">
+                    <StackPanel Orientation="Horizontal" Spacing="10" Margin="8,6,8,22">
+                        <Border Width="32" Height="32" CornerRadius="9" Background="{DynamicResource BrandPrimaryBrush}">
+                            <PathIcon Data="{StaticResource IconMic}" Foreground="White" />
+                        </Border>
+                        <TextBlock Text="VoiceScan" Classes="heading" FontSize="18" VerticalAlignment="Center" />
+                    </StackPanel>
+                    <TextBlock Text="WORKSPACE" Classes="metric-label" Margin="12,0,12,6" />
+                    <Button x:Name="NavEnrollment" Classes="nav" Click="Nav_Click" Tag="Enrollment">
+                        <StackPanel Orientation="Horizontal" Spacing="12">
+                            <PathIcon Data="{StaticResource IconMic}" />
+                            <TextBlock Text="1. Voices" />
+                        </StackPanel>
+                    </Button>
+                    <Button x:Name="NavScan" Classes="nav" Click="Nav_Click" Tag="Scan">
+                        <StackPanel Orientation="Horizontal" Spacing="12">
+                            <PathIcon Data="{StaticResource IconScan}" />
+                            <TextBlock Text="2. Scan recordings" />
+                        </StackPanel>
+                    </Button>
+                    <Button x:Name="NavResults" Classes="nav" Click="Nav_Click" Tag="Results">
+                        <StackPanel Orientation="Horizontal" Spacing="12">
+                            <PathIcon Data="{StaticResource IconResults}" />
+                            <TextBlock Text="3. Results" />
+                        </StackPanel>
+                    </Button>
+                    <Button x:Name="NavReview" Classes="nav" Click="Nav_Click" Tag="Review">
+                        <StackPanel Orientation="Horizontal" Spacing="12">
+                            <PathIcon Data="{StaticResource IconReview}" />
+                            <TextBlock Text="Review Queue" />
+                        </StackPanel>
+                    </Button>
+                </StackPanel>
+            </DockPanel>
+        </Border>
+
+        <Border DockPanel.Dock="Top" Background="{DynamicResource VerdictPossibleSoftBrush}" Padding="16,10"
+                IsVisible="{Binding GpuStatusMessage, Converter={x:Static ObjectConverters.IsNotNull}}">
+            <TextBlock Text="{Binding GpuStatusMessage}" TextWrapping="Wrap" FontSize="12"
+                       Foreground="{DynamicResource VerdictPossibleBrush}" />
+        </Border>
+
+        <ContentControl x:Name="PageHost" Margin="28,24" />
+    </DockPanel>
+</Window>

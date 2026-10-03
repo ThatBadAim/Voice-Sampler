@@ -255,7 +255,7 @@ class BaselineScanner(BaseScanner):
 
     def extract_embedding(self, audio_chunk: np.ndarray) -> np.ndarray:
         """Extract L2-normalized speaker embedding vector for an audio window."""
-        feats = compute_fbank(audio_chunk, sample_rate=16000, n_mels=80)
+        feats = compute_fbank(audio_chunk, sample_rate=16000, n_mels=80, povey_window=self.model_id == "3dspeaker-campplus")
         feats_expanded = np.expand_dims(feats, axis=0)  # [1, T, 80]
         output = self.emb_session.run(None, {self.emb_input_name: feats_expanded})[0]
         emb = output.flatten().astype(np.float32)

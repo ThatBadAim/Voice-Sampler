@@ -1,5 +1,35 @@
 # VoiceScan Accuracy & Evolution Log
 
+## Real-speech re-evaluation (2026-10-03) — supersedes the synthetic dev-set numbers below
+
+**The synthetic `eval/dev_dataset` contains no real speech.** `eval/data_config/speech` is 4 distinct 3-second tones/harmonics copied 4 times each; under WeSpeaker different "speakers" score cosine 0.85–0.90, and Silero VAD rejects them. The EER, thresholds, AHC τ and the AS-Norm "failure" in Sections 1–3 below were measured on that data and carry no information about real voices. They are kept only as history.
+
+Fixes made before re-measuring:
+- **Front-end:** `Filterbank` now follows the Kaldi / kaldi-native-fbank recipe the models were trained with (per-frame DC removal and pre-emphasis, 20 Hz low edge, continuous mel triangles, float-epsilon floor; Hamming + int16 scale for WeSpeaker, Povey + [-1,1] for CAM++). Unit tests compare against kaldi-native-fbank output (max deviation < 2e-3). The old features shifted embeddings to cosine 0.83–0.90 of the correct ones; on real speech the impostor mean cosine fell from 0.134 to 0.108 (WeSpeaker) and 0.245 to 0.067 (CAM++).
+- **VAD:** Silero v5 now gets its 64-sample context, hysteresis, minimum speech/silence and padding. The energy-based fallback that marked speech-free game audio as speech was removed.
+- **Windows:** short segments are tiled instead of zero-padded, segments under 0.5 s are skipped, window times describe real speech, and each segment tail gets an end-aligned window.
+- **Cache:** the key now includes the audio track, VAD, windowing and front-end versions; per-window SNR/overlap are cached (schema v2) so cached and fresh scans give identical verdicts.
+
+Method: `eval/real_speech_eval.py` (LibriSpeech dev-clean, 40 speakers; 20 targets enrolled on 3 utterances, 240 mixed "voice chat" files = 3.43 h, half target-absent; conditions clean, Opus 24 kbps, game audio at 10 dB, a competing speaker at 5 and 0 dB, game 0 dB + Opus). Development data only; no held-out set was used. 60 present files per config at Match level, so differences of a few points are within noise.
+
+| Config (WeSpeaker, T=0.48) | Match: file recall / FA per hr / target-time coverage | Match+Possible: recall / FA per hr / coverage |
+|---|---|---|
+| AHC clustering (default) | 95.8% / 0.0 / 76.9% | 97.5% / 4.1 / 79.2% |
+| no clustering | 95.8% / 0.0 / 75.8% | 96.7% / 2.0 / 77.4% |
+| no clustering, `--smooth-radius 1` | 93.3% / 0.0 / 72.7% | 95.8% / 1.5 / 75.5% |
+| no clustering, `--smooth-radius 2` | 86.7% / 0.0 / 70.7% | 95.0% / 0.9 / 75.0% |
+| CAM++ (T=0.38), AHC | 98.3% / 1.8 / 84.2% | 99.2% / 9.0 / 84.5% |
+
+Window-level findings on real speech (2 s windows, 20 target speakers, 10 degradation conditions):
+- Clean EER 0.0–0.2%. Opus (12–24 kbps), pink noise, game audio and AGC barely matter (EER ≤ 1%). The hard case is a competing speaker at 0 dB (EER 13.5% WeSpeaker, 14.4% CAM++; genuine cosine falls from 0.77 to 0.40).
+- Multi-condition enrollment, multi-prototype max scoring and AS-Norm (clean or condition-matched cohort) gave no measurable gain (pooled EER within ±0.3 points). Not enabled by default.
+- Averaging adjacent window scores lowers window EER (pooled 3.3% → 1.9%, competing speaker 13.5% → 7.6% at 5 windows) but at a fixed threshold it only trades recall/coverage for fewer Possible-level false alarms. Kept as the opt-in `--smooth-radius`; default stays 0.
+- Window-level impostor cosine 99.9th percentile is 0.46, 99.99th is 0.52, so T=0.48 is a reasonable WeSpeaker operating point (about 2 false windows per hour of continuous non-target speech).
+
+Not yet measured: gameplay with real game audio and shouting (only two synthetic game recordings are available), multi-hour files, languages other than English, and a held-out test set.
+
+---
+
 **Date:** 2026-10-02  
 **Dataset:** `eval/dev_dataset` (25 audio clips, 250.0 seconds total duration, stratified across 5 SNR tiers and 8 degradation chains)  
 **Rule Adherence:** Dev set only; 0 runs on held-out test set (`--final` never invoked).

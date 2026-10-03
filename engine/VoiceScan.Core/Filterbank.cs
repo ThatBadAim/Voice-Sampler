@@ -2,118 +2,121 @@ namespace VoiceScan.Core;
 
 using System;
 
+/// <summary>Front-end variants used by the supported embedding models.</summary>
+public enum FbankProfile
+{
+    /// <summary>WeSpeaker: int16-range samples, Hamming window.</summary>
+    WeSpeaker,
+
+    /// <summary>3D-Speaker CAM++: samples in [-1, 1], Kaldi default Povey window.</summary>
+    CamPlusPlus
+}
+
 /// <summary>
-/// Computes 80-dimensional log-mel filterbank features with Cepstral Mean Normalization (CMN).
-/// Matches the Python research implementation exactly for model compatibility.
+/// 80-dim log-mel filterbank features with per-utterance mean normalization, following the
+/// Kaldi / kaldi-native-fbank recipe the WeSpeaker and 3D-Speaker models were trained with
+/// (per-frame DC removal and pre-emphasis, Hamming window, 20 Hz low edge,
+/// triangular filters placed on continuous mel positions, float-epsilon floor).
+/// Verified against kaldi-native-fbank in the unit tests.
 /// </summary>
 public static class Filterbank
 {
+    /// <summary>Changes whenever the feature recipe changes; part of the embedding cache key.</summary>
+    public const string Fingerprint = "fbank-kaldi-v1";
+
     private const int SampleRate = 16000;
     private const int FrameLengthSamples = 400; // 25ms @ 16kHz
     private const int FrameStepSamples = 160;   // 10ms @ 16kHz
     private const int Nfft = 512;
     private const int NumMels = 80;
-    private const float PreEmphasis = 0.97f;
+    private const double PreEmphasis = 0.97;
+    private const double LowFreqHz = 20.0;
+    private const double Int16Scale = 32768.0;
+    private const double LogFloor = 1.1920928955078125e-7; // float epsilon, as in Kaldi
 
-    private static readonly float[] HammingWindow = CreateHammingWindow(FrameLengthSamples);
-    private static readonly float[][] MelFilterbankMatrix = CreateMelFilterbank(SampleRate, Nfft, NumMels);
+    private static readonly double[] HammingWindow = CreateWindow(povey: false);
+    private static readonly double[] PoveyWindow = CreateWindow(povey: true);
+    private static readonly (int First, double[] Weights)[] MelFilters = CreateMelFilterbank();
+    private static readonly double[] CosTable = CreateTwiddles(Math.Cos);
+    private static readonly double[] SinTable = CreateTwiddles(a => -Math.Sin(a));
 
-    public static float[,] ComputeFbank(float[] audio)
+    public static float[,] ComputeFbank(float[] audio, FbankProfile profile = FbankProfile.WeSpeaker)
     {
         if (audio.Length == 0)
         {
             return new float[0, NumMels];
         }
 
-        // Peak normalization if needed
-        float maxVal = 0f;
-        for (int i = 0; i < audio.Length; i++)
-        {
-            float abs = MathF.Abs(audio[i]);
-            if (abs > maxVal) maxVal = abs;
-        }
-
-        float scale = maxVal > 1.0f ? 1.0f / maxVal : 1.0f;
-
-        // Pre-emphasis: y[t] = x[t] - 0.97 * x[t-1]
-        float[] pre = new float[audio.Length];
-        pre[0] = audio[0] * scale;
-        for (int i = 1; i < audio.Length; i++)
-        {
-            pre[i] = (audio[i] * scale) - (PreEmphasis * audio[i - 1] * scale);
-        }
-
-        // Pad if shorter than one frame
-        if (pre.Length < FrameLengthSamples)
-        {
-            float[] padded = new float[FrameLengthSamples];
-            Array.Copy(pre, padded, pre.Length);
-            pre = padded;
-        }
-
-        int numFrames = 1 + (pre.Length - FrameLengthSamples) / FrameStepSamples;
+        double sampleScale = profile == FbankProfile.WeSpeaker ? Int16Scale : 1.0;
+        double[] window = profile == FbankProfile.WeSpeaker ? HammingWindow : PoveyWindow;
+        int length = Math.Max(audio.Length, FrameLengthSamples);
+        int numFrames = 1 + (length - FrameLengthSamples) / FrameStepSamples;
         float[,] logMels = new float[numFrames, NumMels];
 
-        float[] fftReal = new float[Nfft];
-        float[] fftImag = new float[Nfft];
-        float[] powerSpectrum = new float[(Nfft / 2) + 1];
+        double[] frame = new double[FrameLengthSamples];
+        double[] fftReal = new double[Nfft];
+        double[] fftImag = new double[Nfft];
+        double[] power = new double[(Nfft / 2) + 1];
 
-        // Process each frame
-        for (int frameIdx = 0; frameIdx < numFrames; frameIdx++)
+        for (int f = 0; f < numFrames; f++)
         {
-            int startSample = frameIdx * FrameStepSamples;
-
-            // Windowing
+            int start = f * FrameStepSamples;
+            double mean = 0.0;
             for (int i = 0; i < FrameLengthSamples; i++)
             {
-                fftReal[i] = pre[startSample + i] * HammingWindow[i];
-                fftImag[i] = 0f;
+                int idx = start + i;
+                frame[i] = idx < audio.Length ? audio[idx] * sampleScale : 0.0;
+                mean += frame[i];
             }
-            for (int i = FrameLengthSamples; i < Nfft; i++)
+            mean /= FrameLengthSamples;
+
+            for (int i = 0; i < FrameLengthSamples; i++)
             {
-                fftReal[i] = 0f;
-                fftImag[i] = 0f;
+                frame[i] -= mean;
             }
 
-            // In-place Radix-2 Cooley-Tukey FFT
+            for (int i = FrameLengthSamples - 1; i > 0; i--)
+            {
+                frame[i] -= PreEmphasis * frame[i - 1];
+            }
+            frame[0] -= PreEmphasis * frame[0];
+
+            for (int i = 0; i < FrameLengthSamples; i++)
+            {
+                fftReal[i] = frame[i] * window[i];
+                fftImag[i] = 0.0;
+            }
+            Array.Clear(fftReal, FrameLengthSamples, Nfft - FrameLengthSamples);
+            Array.Clear(fftImag, FrameLengthSamples, Nfft - FrameLengthSamples);
+
             ComputeFft(fftReal, fftImag);
 
-            // Power spectrum: |X[k]|^2 / Nfft
-            for (int k = 0; k <= Nfft / 2; k++)
+            for (int k = 0; k < power.Length; k++)
             {
-                float re = fftReal[k];
-                float im = fftImag[k];
-                powerSpectrum[k] = ((re * re) + (im * im)) / Nfft;
+                power[k] = (fftReal[k] * fftReal[k]) + (fftImag[k] * fftImag[k]);
             }
 
-            // Mel Filterbank dot product
             for (int m = 0; m < NumMels; m++)
             {
-                float energy = 0f;
-                float[] melFilter = MelFilterbankMatrix[m];
-                for (int k = 0; k <= Nfft / 2; k++)
+                var (first, weights) = MelFilters[m];
+                double energy = 0.0;
+                for (int k = 0; k < weights.Length; k++)
                 {
-                    energy += powerSpectrum[k] * melFilter[k];
+                    energy += power[first + k] * weights[k];
                 }
 
-                if (energy < 1e-12f)
-                {
-                    energy = 1e-12f;
-                }
-
-                logMels[frameIdx, m] = MathF.Log(energy);
+                logMels[f, m] = (float)Math.Log(Math.Max(energy, LogFloor));
             }
         }
 
-        // Cepstral Mean Normalization (CMN): subtract mean across time frames for each channel
         for (int m = 0; m < NumMels; m++)
         {
-            float sum = 0f;
+            double sum = 0.0;
             for (int f = 0; f < numFrames; f++)
             {
                 sum += logMels[f, m];
             }
-            float mean = sum / numFrames;
+            float mean = (float)(sum / numFrames);
             for (int f = 0; f < numFrames; f++)
             {
                 logMels[f, m] -= mean;
@@ -123,68 +126,70 @@ public static class Filterbank
         return logMels;
     }
 
-    private static float[] CreateHammingWindow(int length)
+    private static double[] CreateWindow(bool povey)
     {
-        float[] window = new float[length];
-        for (int i = 0; i < length; i++)
+        double[] window = new double[FrameLengthSamples];
+        for (int i = 0; i < FrameLengthSamples; i++)
         {
-            // numpy.hamming(M): 0.54 - 0.46 * cos(2 * pi * n / (M - 1))
-            window[i] = 0.54f - (0.46f * MathF.Cos((2f * MathF.PI * i) / (length - 1)));
+            double phase = 2.0 * Math.PI * i / (FrameLengthSamples - 1);
+            window[i] = povey
+                ? Math.Pow(0.5 - (0.5 * Math.Cos(phase)), 0.85)
+                : 0.54 - (0.46 * Math.Cos(phase));
         }
         return window;
     }
 
-    private static float[][] CreateMelFilterbank(int sampleRate, int nfft, int numMels)
+    private static double HzToMel(double hz) => 1127.0 * Math.Log(1.0 + (hz / 700.0));
+
+    private static (int First, double[] Weights)[] CreateMelFilterbank()
     {
-        int numBins = (nfft / 2) + 1;
-        float lowMel = 0f;
-        float highMel = 2595f * MathF.Log10(1f + ((sampleRate / 2f) / 700f));
+        double lowMel = HzToMel(LowFreqHz);
+        double highMel = HzToMel(SampleRate / 2.0);
+        double delta = (highMel - lowMel) / (NumMels + 1);
+        var filters = new (int First, double[] Weights)[NumMels];
 
-        float[] melPoints = new float[numMels + 2];
-        for (int i = 0; i < melPoints.Length; i++)
+        for (int m = 0; m < NumMels; m++)
         {
-            melPoints[i] = lowMel + (i * (highMel - lowMel) / (numMels + 1));
-        }
+            double left = lowMel + (m * delta);
+            double center = left + delta;
+            double right = center + delta;
 
-        int[] binPoints = new int[numMels + 2];
-        for (int i = 0; i < binPoints.Length; i++)
-        {
-            float hz = 700f * (MathF.Pow(10f, melPoints[i] / 2595f) - 1f);
-            binPoints[i] = (int)MathF.Floor((nfft + 1) * hz / sampleRate);
-        }
-
-        float[][] filters = new float[numMels][];
-        for (int m = 1; m <= numMels; m++)
-        {
-            filters[m - 1] = new float[numBins];
-            int left = binPoints[m - 1];
-            int center = binPoints[m];
-            int right = binPoints[m + 1];
-
-            for (int k = left; k < center; k++)
+            int first = -1;
+            int last = -1;
+            var weights = new double[(Nfft / 2) + 1];
+            for (int k = 0; k <= Nfft / 2; k++)
             {
-                if (center != left)
+                double mel = HzToMel((double)k * SampleRate / Nfft);
+                if (mel <= left || mel >= right)
                 {
-                    filters[m - 1][k] = (float)(k - left) / (center - left);
+                    continue;
                 }
+                weights[k] = mel <= center
+                    ? (mel - left) / (center - left)
+                    : (right - mel) / (right - center);
+                if (first < 0) first = k;
+                last = k;
             }
 
-            for (int k = center; k < right; k++)
-            {
-                if (right != center)
-                {
-                    filters[m - 1][k] = (float)(right - k) / (right - center);
-                }
-            }
+            filters[m] = (first, weights[first..(last + 1)]);
         }
 
         return filters;
     }
 
-    private static void ComputeFft(float[] real, float[] imag)
+    private static double[] CreateTwiddles(Func<double, double> trig)
+    {
+        double[] table = new double[Nfft / 2];
+        for (int i = 0; i < table.Length; i++)
+        {
+            table[i] = trig(2.0 * Math.PI * i / Nfft);
+        }
+        return table;
+    }
+
+    private static void ComputeFft(double[] real, double[] imag)
     {
         int n = real.Length;
-        // Bit reversal permutation
         int j = 0;
         for (int i = 0; i < n - 1; i++)
         {
@@ -202,35 +207,26 @@ public static class Filterbank
             j += k;
         }
 
-        // Cooley-Tukey computation
         for (int len = 2; len <= n; len <<= 1)
         {
-            float angle = -2f * MathF.PI / len;
-            float wlenReal = MathF.Cos(angle);
-            float wlenImag = MathF.Sin(angle);
-
+            int half = len / 2;
+            int stride = n / len;
             for (int i = 0; i < n; i += len)
             {
-                float wReal = 1f;
-                float wImag = 0f;
-
-                for (int m = 0; m < len / 2; m++)
+                for (int m = 0; m < half; m++)
                 {
+                    double wReal = CosTable[m * stride];
+                    double wImag = SinTable[m * stride];
                     int u = i + m;
-                    int v = i + m + (len / 2);
+                    int v = u + half;
 
-                    float vReal = (real[v] * wReal) - (imag[v] * wImag);
-                    float vImag = (real[v] * wImag) + (imag[v] * wReal);
+                    double vReal = (real[v] * wReal) - (imag[v] * wImag);
+                    double vImag = (real[v] * wImag) + (imag[v] * wReal);
 
                     real[v] = real[u] - vReal;
                     imag[v] = imag[u] - vImag;
                     real[u] += vReal;
                     imag[u] += vImag;
-
-                    float nextWReal = (wReal * wlenReal) - (wImag * wlenImag);
-                    float nextWImag = (wReal * wlenImag) + (wImag * wlenReal);
-                    wReal = nextWReal;
-                    wImag = nextWImag;
                 }
             }
         }

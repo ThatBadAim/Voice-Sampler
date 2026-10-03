@@ -20,6 +20,8 @@ public sealed class ResultsViewModel : INotifyPropertyChanged
     private HitSegmentResult? _selectedSegment;
     private double _playbackPosition;
     private bool _isPlaying;
+    private bool _isExporting;
+    private string? _exportStatus;
 
     public event PropertyChangedEventHandler? PropertyChanged;
 
@@ -108,7 +110,25 @@ public sealed class ResultsViewModel : INotifyPropertyChanged
         private set => SetField(ref _isPlaying, value);
     }
 
+    /// <summary>Supplies the scan settings recorded in an exported report; set by the owner of the scan options.</summary>
+    public Func<ReportExportSettings>? ExportSettingsProvider { get; set; }
+
+    public bool HasResults => _allResults.Count > 0;
+
+    public bool IsExporting
+    {
+        get => _isExporting;
+        private set => SetField(ref _isExporting, value);
+    }
+
+    public string? ExportStatus
+    {
+        get => _exportStatus;
+        private set => SetField(ref _exportStatus, value);
+    }
+
     public bool HasSelectedFile => _selectedFile != null;
+    public bool IsAudioAvailable => _playbackController.IsAudioAvailable;
 
     public ResultsViewModel(IAudioPlaybackController playbackController)
     {
@@ -125,10 +145,34 @@ public sealed class ResultsViewModel : INotifyPropertyChanged
         };
     }
 
+    /// <summary>Writes a CSV, a PDF and the matching audio clips for every scanned file into <paramref name="outputDirectory"/>.</summary>
+    public async Task ExportReportAsync(string outputDirectory, CancellationToken cancellationToken = default)
+    {
+        if (ExportSettingsProvider is null || _allResults.Count == 0) return;
+
+        IsExporting = true;
+        ExportStatus = "Exporting report and audio clips...";
+        try
+        {
+            var result = await new EvidenceReportExporter().ExportReportAsync(
+                _allResults.ToList(), ExportSettingsProvider(), outputDirectory, cancellationToken: cancellationToken);
+            ExportStatus = $"Exported {result.TotalSegmentsExported} hit(s) with {result.ExtractedAudioClipPaths.Count} audio clip(s) to {outputDirectory}.";
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
+        {
+            ExportStatus = $"Export failed: {ex.Message}";
+        }
+        finally
+        {
+            IsExporting = false;
+        }
+    }
+
     public void SetResults(IEnumerable<FileVerdictResult> results)
     {
         _allResults.Clear();
         _allResults.AddRange(results);
+        OnPropertyChanged(nameof(HasResults));
         ApplyFilterAndSort();
 
         if (FilteredFiles.Count > 0 && SelectedFile == null)
@@ -140,6 +184,7 @@ public sealed class ResultsViewModel : INotifyPropertyChanged
     public void AddResult(FileVerdictResult result)
     {
         _allResults.Add(result);
+        OnPropertyChanged(nameof(HasResults));
         ApplyFilterAndSort();
     }
 

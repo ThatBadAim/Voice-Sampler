@@ -106,6 +106,48 @@ public static class AudioDecoder
     }
 
     /// <summary>
+    /// Probe media container duration in seconds using ffprobe.
+    /// Returns 0.0 if duration cannot be determined.
+    /// </summary>
+    public static async Task<double> GetMediaDurationSecondsAsync(string mediaFilePath, CancellationToken cancellationToken = default)
+    {
+        if (!File.Exists(mediaFilePath))
+        {
+            return 0.0;
+        }
+
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = "ffprobe",
+            Arguments = $"-v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 \"{mediaFilePath}\"",
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true
+        };
+
+        try
+        {
+            using var process = Process.Start(startInfo);
+            if (process == null) return 0.0;
+
+            var outputTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
+            await process.WaitForExitAsync(cancellationToken);
+            string output = (await outputTask).Trim();
+
+            if (double.TryParse(output, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out double duration))
+            {
+                return duration;
+            }
+            return 0.0;
+        }
+        catch
+        {
+            return 0.0;
+        }
+    }
+
+    /// <summary>
     /// Stream audio chunks from media file via FFmpeg process.
     /// Memory consumption is strictly bounded by channel capacity (default 8 chunks ~ 512KB RAM).
     /// </summary>
@@ -142,6 +184,7 @@ public static class AudioDecoder
         };
 
         var process = Process.Start(startInfo) ?? throw new InvalidOperationException($"Failed to launch FFmpeg for {mediaFilePath}");
+        using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
 
         // Producer task: reads raw stdout and pushes chunks into bounded channel
         _ = Task.Run(async () =>
@@ -155,38 +198,111 @@ public static class AudioDecoder
                     long totalSamplesRead = 0;
 
                     int bytesRead;
-                    while ((bytesRead = await ReadExactOrEofAsync(stream, byteBuffer, cancellationToken)) > 0)
+                    while ((bytesRead = await ReadExactOrEofAsync(stream, byteBuffer, linkedCts.Token)) > 0)
                     {
                         int floatCount = bytesRead / sizeof(float);
+                        if (floatCount == 0) continue;
+
                         float[] floatChunk = new float[floatCount];
-                        Buffer.BlockCopy(byteBuffer, 0, floatChunk, 0, bytesRead);
+                        Buffer.BlockCopy(byteBuffer, 0, floatChunk, 0, floatCount * sizeof(float));
 
                         double startTime = (double)totalSamplesRead / sampleRate;
                         totalSamplesRead += floatCount;
 
                         await channel.Writer.WriteAsync(
                             new DecodedAudioChunk(floatChunk, totalSamplesRead - floatCount, startTime, false),
-                            cancellationToken);
+                            linkedCts.Token);
                     }
 
-                    await process.WaitForExitAsync(cancellationToken);
+                    await process.WaitForExitAsync(linkedCts.Token);
                     channel.Writer.Complete();
                 }
             }
             catch (Exception ex)
             {
-                Logging.VoiceScanLogger.Error("AudioDecoder", $"Error streaming audio from {mediaFilePath}", ex);
+                if (!linkedCts.IsCancellationRequested)
+                {
+                    Logging.VoiceScanLogger.Error("AudioDecoder", $"Error streaming audio from {mediaFilePath}", ex);
+                }
                 channel.Writer.Complete(ex);
             }
-        }, cancellationToken);
+            finally
+            {
+                try
+                {
+                    if (!process.HasExited)
+                    {
+                        process.Kill();
+                    }
+                }
+                catch
+                {
+                    // Ignore process cleanup errors
+                }
+            }
+        }, linkedCts.Token);
 
         // Consumer: yields decoded chunks as they arrive
-        while (await channel.Reader.WaitToReadAsync(cancellationToken))
+        try
         {
-            while (channel.Reader.TryRead(out var chunk))
+            while (await channel.Reader.WaitToReadAsync(linkedCts.Token))
             {
-                yield return chunk;
+                while (channel.Reader.TryRead(out var chunk))
+                {
+                    yield return chunk;
+                }
             }
+        }
+        finally
+        {
+            linkedCts.Cancel();
+        }
+    }
+
+    /// <summary>
+    /// Extracts a segment of audio directly to a 16kHz mono WAV file using FFmpeg fast seek.
+    /// Does not load the entire audio file into RAM.
+    /// </summary>
+    public static async Task ExtractAudioSegmentAsync(
+        string mediaFilePath,
+        string outputWavPath,
+        double startTimeSeconds,
+        double durationSeconds,
+        int audioTrackIndex = 0,
+        int sampleRate = DefaultSampleRate,
+        CancellationToken cancellationToken = default)
+    {
+        string? parent = Path.GetDirectoryName(outputWavPath);
+        if (!string.IsNullOrEmpty(parent))
+        {
+            Directory.CreateDirectory(parent);
+        }
+
+        string mapArg = audioTrackIndex >= 0 ? $"-map 0:a:{audioTrackIndex}?" : "-map 0:a:0?";
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = "ffmpeg",
+            Arguments = string.Format(
+                System.Globalization.CultureInfo.InvariantCulture,
+                "-y -v error -ss {0:F3} -t {1:F3} -i \"{2}\" {3} -ar {4} -ac 1 -c:a pcm_s16le \"{5}\"",
+                Math.Max(0.0, startTimeSeconds),
+                Math.Max(0.1, durationSeconds),
+                mediaFilePath,
+                mapArg,
+                sampleRate,
+                outputWavPath),
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true
+        };
+
+        using var process = Process.Start(startInfo) ?? throw new InvalidOperationException($"Failed to launch FFmpeg for extraction: {outputWavPath}");
+        await process.WaitForExitAsync(cancellationToken);
+        if (process.ExitCode != 0)
+        {
+            string err = await process.StandardError.ReadToEndAsync(cancellationToken);
+            throw new InvalidOperationException($"FFmpeg extraction failed ({process.ExitCode}): {err}");
         }
     }
 

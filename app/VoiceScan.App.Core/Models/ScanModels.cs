@@ -10,16 +10,6 @@ public enum ScanExecutionState
     Failed
 }
 
-public sealed record FileScanTaskItem(
-    string FilePath,
-    string FileName,
-    long FileSizeBytes,
-    double EstimatedDurationSeconds,
-    string StatusText,
-    double ProgressRatio,
-    bool IsCompleted,
-    string? ErrorMessage = null);
-
 public sealed record OverallScanProgress(
     ScanExecutionState State,
     int TotalFiles,

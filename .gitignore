@@ -6,6 +6,7 @@
 .vs/
 *.user
 *.suo
+dist/
 
 # Python artifacts
 __pycache__/
@@ -48,6 +49,7 @@ eval/reports/
 eval/data_config/speech/
 eval/data_config/game_audio/
 *.wav
+!engine/VoiceScan.Tests/fixtures/*.wav
 
 # Evaluation external / held-out data safety
 /test_set/

@@ -32,10 +32,12 @@ public sealed class ReviewViewModel : INotifyPropertyChanged
             {
                 if (value != null)
                 {
-                    _playbackController.LoadFile(value.Segment.FilePath, value.Segment.DurationSeconds);
+                    // The queue only knows the segment, not the file length; cover everything up to the segment end so seeks are not clamped.
+                    _playbackController.LoadFile(value.Segment.FilePath, Math.Max(value.Segment.DurationSeconds, value.Segment.EndTimeSeconds));
                 }
                 ReviewerNotes = string.Empty;
                 OnPropertyChanged(nameof(HasSelectedItem));
+                OnPropertyChanged(nameof(CanPlaySnippet));
             }
         }
     }
@@ -78,6 +80,8 @@ public sealed class ReviewViewModel : INotifyPropertyChanged
 
     public bool HasSelectedItem => _selectedItem != null;
     public bool CanAct => HasSelectedItem && !IsProcessing;
+    public bool IsAudioAvailable => _playbackController.IsAudioAvailable;
+    public bool CanPlaySnippet => HasSelectedItem && IsAudioAvailable;
 
     public ReviewViewModel(IReviewRepository reviewRepository, IAudioPlaybackController playbackController)
     {

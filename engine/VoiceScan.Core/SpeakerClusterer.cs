@@ -13,9 +13,19 @@ public sealed class WindowItem
     public double StartTimeSeconds { get; }
     public double EndTimeSeconds { get; }
     public float[] Embedding { get; }
+    public double SnrDb { get; }
+    public bool SuspectedOverlap { get; }
 
-    public WindowItem(int index, double startTimeSeconds, double endTimeSeconds, float[] embedding)
+    public WindowItem(
+        int index,
+        double startTimeSeconds,
+        double endTimeSeconds,
+        float[] embedding,
+        double snrDb = 20.0,
+        bool suspectedOverlap = false)
     {
+        SnrDb = snrDb;
+        SuspectedOverlap = suspectedOverlap;
         Index = index;
         StartTimeSeconds = startTimeSeconds;
         EndTimeSeconds = endTimeSeconds;
@@ -93,6 +103,31 @@ public static class SpeakerClusterer
             }
         }
 
+        // Nearest neighbor tracking for O(N^2) total clustering time
+        int[] nearest = new int[n];
+        double[] minDist = new double[n];
+
+        void UpdateNearest(int i)
+        {
+            double best = double.MaxValue;
+            int bestNeighbor = -1;
+            foreach (int j in active)
+            {
+                if (i != j && dist[i, j] < best)
+                {
+                    best = dist[i, j];
+                    bestNeighbor = j;
+                }
+            }
+            minDist[i] = best;
+            nearest[i] = bestNeighbor;
+        }
+
+        foreach (int i in active)
+        {
+            UpdateNearest(i);
+        }
+
         // Agglomerative merging loop
         while (active.Count > 1)
         {
@@ -102,20 +137,23 @@ public static class SpeakerClusterer
 
             foreach (int i in active)
             {
-                foreach (int j in active)
+                if (minDist[i] < bestDist)
                 {
-                    if (i < j && dist[i, j] < bestDist)
-                    {
-                        bestDist = dist[i, j];
-                        bestI = i;
-                        bestJ = j;
-                    }
+                    bestDist = minDist[i];
+                    bestI = i;
+                    bestJ = nearest[i];
                 }
             }
 
-            if (bestDist > distanceThreshold || bestI == -1)
+            if (bestDist > distanceThreshold || bestI == -1 || bestJ == -1)
             {
                 break; // Stopping threshold reached
+            }
+
+            // Ensure canonical ordering (bestI < bestJ)
+            if (bestI > bestJ)
+            {
+                (bestI, bestJ) = (bestJ, bestI);
             }
 
             // Merge bestJ into bestI
@@ -133,6 +171,24 @@ public static class SpeakerClusterer
                     double d = ComputeClusterDistance(ci, clusters[k]);
                     dist[bestI, k] = d;
                     dist[k, bestI] = d;
+                }
+            }
+
+            // Update nearest neighbors
+            foreach (int k in active)
+            {
+                if (k == bestI)
+                {
+                    UpdateNearest(bestI);
+                }
+                else if (nearest[k] == bestI || nearest[k] == bestJ)
+                {
+                    UpdateNearest(k);
+                }
+                else if (dist[k, bestI] < minDist[k])
+                {
+                    minDist[k] = dist[k, bestI];
+                    nearest[k] = bestI;
                 }
             }
         }

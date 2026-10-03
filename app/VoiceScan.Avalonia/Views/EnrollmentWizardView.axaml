@@ -1,0 +1,94 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:VoiceScan.App.Core.ViewModels"
+             xmlns:m="using:VoiceScan.App.Core.Models"
+             x:Class="VoiceScan.App.Views.EnrollmentWizardView"
+             x:DataType="vm:EnrollmentWizardViewModel">
+
+    <ScrollViewer>
+        <StackPanel Spacing="20" MaxWidth="1000" HorizontalAlignment="Stretch">
+            <StackPanel Spacing="4">
+                <TextBlock Text="Voices" Classes="title" />
+                <TextBlock Text="Teach VoiceScan what the person sounds like, then find them in your recordings. Takes about a minute." Classes="subtitle" TextWrapping="Wrap" />
+            </StackPanel>
+
+            <Border Classes="card" IsVisible="{Binding HasProfiles}">
+                <StackPanel Spacing="12">
+                    <TextBlock Text="Your voices" Classes="heading" />
+                    <ListBox x:Name="VoicesList" ItemsSource="{Binding Profiles}" SelectedItem="{Binding SelectedProfile}"
+                             MaxHeight="220" KeyDown="VoicesList_KeyDown">
+                        <ListBox.ItemTemplate>
+                            <DataTemplate x:DataType="m:VoiceProfileSummary">
+                                <Grid ColumnDefinitions="*,Auto">
+                                    <TextBlock Text="{Binding Name}" VerticalAlignment="Center" />
+                                    <TextBlock Grid.Column="1" Classes="secondary" VerticalAlignment="Center"
+                                               Text="{Binding CreatedAtUtc, StringFormat='added {0:d MMM yyyy}'}" />
+                                </Grid>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+                    <Button Content="Delete selected voice" Click="DeleteVoice_Click" IsEnabled="{Binding CanDeleteProfile}" HorizontalAlignment="Left" />
+                </StackPanel>
+            </Border>
+
+            <Border Classes="card">
+                <StackPanel Spacing="12">
+                    <TextBlock Text="Add a new voice" Classes="heading" />
+                    <TextBlock Text="1. Choose a voice sample" FontWeight="SemiBold" />
+                    <TextBlock Classes="secondary" TextWrapping="Wrap"
+                               Text="Pick a recording of only this person talking, ideally 30 seconds or more with no music, game sound or other voices. Audio and video files both work." />
+                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                        <TextBox Text="{Binding SelectedAudioPath}" IsReadOnly="True" PlaceholderText="No file chosen" />
+                        <Button Grid.Column="1" Classes="accent" Content="Choose file…" Click="BrowseAudio_Click" MinWidth="130" />
+                    </Grid>
+                    <ProgressBar IsIndeterminate="True" IsVisible="{Binding IsAnalyzing}" />
+                    <UniformGrid Columns="3" IsVisible="{Binding QualityReport, Converter={x:Static ObjectConverters.IsNotNull}}">
+                        <StackPanel>
+                            <TextBlock Text="SPEECH FOUND" Classes="metric-label" />
+                            <TextBlock Text="{Binding QualityReport.SpeechDurationSeconds, StringFormat={}{0:F0} s}" Classes="metric-value" />
+                        </StackPanel>
+                        <StackPanel>
+                            <TextBlock Text="CLARITY (SNR)" Classes="metric-label" />
+                            <TextBlock Text="{Binding QualityReport.SnrEstimateDb, StringFormat={}{0:F0} dB}" Classes="metric-value" />
+                        </StackPanel>
+                        <StackPanel>
+                            <TextBlock Text="BACKGROUND NOISE" Classes="metric-label" />
+                            <TextBlock Text="{Binding QualityReport.NoiseFloorRms, StringFormat={}{0:F4}}" Classes="metric-value" />
+                        </StackPanel>
+                    </UniformGrid>
+                    <Border Classes="callout"
+                            IsVisible="{Binding QualityReport, Converter={x:Static ObjectConverters.IsNotNull}}">
+                        <ItemsControl ItemsSource="{Binding QualityReport.FeedbackMessages}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate x:DataType="x:String">
+                                    <TextBlock Text="{Binding StringFormat='• {0}'}" TextWrapping="Wrap" />
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </Border>
+                </StackPanel>
+            </Border>
+
+            <Border Classes="card">
+                <StackPanel Spacing="16">
+                    <TextBlock Text="2. Name and confirm" FontWeight="SemiBold" />
+                    <TextBox Text="{Binding ProfileName}" PlaceholderText="Name, e.g. Alice" />
+                    <TextBlock Classes="secondary" TextWrapping="Wrap"
+                               Text="A voiceprint is sensitive biometric data. VoiceScan stores it only on this computer and never sends it anywhere." />
+                    <CheckBox IsChecked="{Binding HasConsent}">
+                        <TextBlock Text="The person whose voice this is has agreed to be enrolled." FontWeight="Medium" TextWrapping="Wrap" />
+                    </CheckBox>
+                    <Button Classes="accent" HorizontalAlignment="Left" Padding="22,10" Click="CreateProfile_Click"
+                            IsEnabled="{Binding CanCreateProfile}">
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <PathIcon Data="{StaticResource IconSparkle}" />
+                            <TextBlock Text="Save voice and continue" />
+                        </StackPanel>
+                    </Button>
+                    <ProgressBar IsIndeterminate="True" IsVisible="{Binding IsEnrolling}" />
+                    <TextBlock Text="{Binding StatusMessage}" Classes="secondary" TextWrapping="Wrap" />
+                </StackPanel>
+            </Border>
+        </StackPanel>
+    </ScrollViewer>
+</UserControl>

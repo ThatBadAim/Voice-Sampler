@@ -13,6 +13,7 @@ public sealed class ScanDashboardViewModel : INotifyPropertyChanged
 
     private string? _selectedTargetFolderPath;
     private string? _selectedProfilePath;
+    private VoiceProfileSummary? _selectedProfile;
     private bool _useClustering = true;
     private bool _useTemporalSmoothing = true;
     private double _clusterThreshold = 0.40;
@@ -25,6 +26,24 @@ public sealed class ScanDashboardViewModel : INotifyPropertyChanged
 
     public ObservableCollection<string> TargetFiles { get; } = [];
     public ObservableCollection<FileVerdictResult> CompletedFiles { get; } = [];
+    public ObservableCollection<VoiceProfileSummary> Profiles { get; } = [];
+
+    /// <summary>Raised on the UI context when a scan ends in the Completed state.</summary>
+    public event Action? ScanFinished;
+
+    public bool HasProfiles => Profiles.Count > 0;
+
+    public VoiceProfileSummary? SelectedProfile
+    {
+        get => _selectedProfile;
+        set
+        {
+            if (SetField(ref _selectedProfile, value))
+            {
+                SelectedProfilePath = value?.Path;
+            }
+        }
+    }
 
     public string? SelectedTargetFolderPath
     {
@@ -116,19 +135,28 @@ public sealed class ScanDashboardViewModel : INotifyPropertyChanged
     public ScanDashboardViewModel(IBackgroundScanController scanController)
     {
         _scanController = scanController;
+        RefreshProfiles();
         _progress = _scanController.CurrentProgress;
 
-        _scanController.ProgressChanged += (s, e) =>
+        // Controller events fire on worker threads; collections bound by the UI must change on the creating context.
+        var uiContext = SynchronizationContext.Current;
+        void OnUi(Action action)
+        {
+            if (uiContext == null || SynchronizationContext.Current == uiContext) action();
+            else uiContext.Post(_ => action(), null);
+        }
+
+        _scanController.ProgressChanged += (s, e) => OnUi(() =>
         {
             Progress = e;
-        };
+        });
 
-        _scanController.FileCompleted += (s, file) =>
+        _scanController.FileCompleted += (s, file) => OnUi(() =>
         {
             CompletedFiles.Add(file);
-        };
+        });
 
-        _scanController.StateChanged += (s, state) =>
+        _scanController.StateChanged += (s, state) => OnUi(() =>
         {
             IsScanning = state == ScanExecutionState.Scanning || state == ScanExecutionState.Paused;
             IsPaused = state == ScanExecutionState.Paused;
@@ -142,7 +170,23 @@ public sealed class ScanDashboardViewModel : INotifyPropertyChanged
                 ScanExecutionState.Failed => "Scan encountered an error.",
                 _ => null
             };
-        };
+
+            if (state == ScanExecutionState.Completed) ScanFinished?.Invoke();
+        });
+    }
+
+    /// <summary>Reloads saved profiles; keeps the current choice, or selects <paramref name="selectPath"/> when given.</summary>
+    public void RefreshProfiles(string? selectPath = null)
+    {
+        selectPath ??= _selectedProfilePath;
+        Profiles.Clear();
+        foreach (var profile in ProfileLibrary.List())
+        {
+            Profiles.Add(profile);
+        }
+
+        OnPropertyChanged(nameof(HasProfiles));
+        SelectedProfile = Profiles.FirstOrDefault(p => p.Path == selectPath) ?? Profiles.FirstOrDefault();
     }
 
     public void LoadFilesFromFolder(string? folderPath)

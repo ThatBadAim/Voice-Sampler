@@ -18,18 +18,19 @@ public sealed class WaveformService : IWaveformService
             return new WaveformEnvelope([], [], 0.0, 0);
         }
 
-        List<float> samples = [];
+        var accumulator = new EnvelopeAccumulator();
         await foreach (var chunk in AudioDecoder.StreamDecodeAsync(audioFilePath, cancellationToken: cancellationToken))
         {
-            samples.AddRange(chunk.Samples);
+            accumulator.Add(chunk.Samples);
         }
 
-        if (samples.Count == 0)
+        if (accumulator.SampleCount == 0)
         {
             return new WaveformEnvelope([], [], 0.0, 0);
         }
 
-        return GenerateEnvelopeFromPcm(samples.ToArray(), 16000, targetBuckets);
+        var (minPeaks, maxPeaks) = accumulator.Build(Math.Max(1, targetBuckets));
+        return new WaveformEnvelope(minPeaks, maxPeaks, (double)accumulator.SampleCount / 16000.0, minPeaks.Length);
     }
 
     public WaveformEnvelope GenerateEnvelopeFromPcm(ReadOnlySpan<float> pcm, int sampleRate = 16000, int targetBuckets = 300)

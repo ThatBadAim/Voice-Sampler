@@ -20,7 +20,7 @@ public sealed class VoiceScanDatabase : IDisposable
 
     public VoiceScanDatabase(string? dbFilePath = null)
     {
-        _dbFilePath = dbFilePath ?? ResolveDefaultDatabasePath();
+        _dbFilePath = dbFilePath ?? AppPaths.DatabasePath;
         var dir = Path.GetDirectoryName(_dbFilePath);
         if (!string.IsNullOrEmpty(dir))
         {
@@ -33,25 +33,6 @@ public sealed class VoiceScanDatabase : IDisposable
             Mode = SqliteOpenMode.ReadWriteCreate,
             Cache = SqliteCacheMode.Shared
         }.ToString();
-    }
-
-    public static string ResolveDefaultDatabasePath()
-    {
-        string baseDir = AppContext.BaseDirectory;
-        // Check if inside repo
-        var cur = new DirectoryInfo(baseDir);
-        while (cur != null && !File.Exists(Path.Combine(cur.FullName, "VoiceScan.sln")))
-        {
-            cur = cur.Parent;
-        }
-
-        if (cur != null)
-        {
-            return Path.Combine(cur.FullName, "voicescan.db");
-        }
-
-        string appData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-        return Path.Combine(appData, "VoiceScan", "voicescan.db");
     }
 
     public async Task InitializeAsync(CancellationToken cancellationToken = default)
@@ -156,6 +137,23 @@ public sealed class VoiceScanDatabase : IDisposable
 
                 INSERT INTO schema_migrations (version, applied_at, description)
                 VALUES (1, datetime('now'), 'Initial schema: profiles, files, embeddings_cache, scan_results');
+            ";
+            await cmd.ExecuteNonQueryAsync(cancellationToken);
+            await tx.CommitAsync(cancellationToken);
+        }
+
+        if (currentVersion < 2)
+        {
+            // Cached rows from before per-window diagnostics cannot be reused: they carry no SNR/overlap evidence.
+            using var tx = connection.BeginTransaction();
+            using var cmd = connection.CreateCommand();
+            cmd.Transaction = tx;
+            cmd.CommandText = @"
+                DELETE FROM embeddings_cache;
+                ALTER TABLE cached_window_embeddings ADD COLUMN snr_db REAL NOT NULL DEFAULT 20.0;
+                ALTER TABLE cached_window_embeddings ADD COLUMN suspected_overlap INTEGER NOT NULL DEFAULT 0;
+                INSERT INTO schema_migrations (version, applied_at, description)
+                VALUES (2, datetime('now'), 'Per-window SNR and overlap diagnostics in the embedding cache');
             ";
             await cmd.ExecuteNonQueryAsync(cancellationToken);
             await tx.CommitAsync(cancellationToken);
@@ -316,7 +314,7 @@ public sealed class VoiceScanDatabase : IDisposable
         // Fetch windows
         using var fetchCmd = connection.CreateCommand();
         fetchCmd.CommandText = @"
-            SELECT start_time_seconds, end_time_seconds, embedding
+            SELECT start_time_seconds, end_time_seconds, embedding, snr_db, suspected_overlap
             FROM cached_window_embeddings
             WHERE cache_id = @cid
             ORDER BY window_index ASC;";
@@ -330,7 +328,7 @@ public sealed class VoiceScanDatabase : IDisposable
             double end = winReader.GetDouble(1);
             byte[] embBytes = (byte[])winReader[2];
             float[] emb = BytesToFloatArray(embBytes);
-            list.Add(new CachedWindow(start, end, emb));
+            list.Add(new CachedWindow(start, end, emb, winReader.GetDouble(3), winReader.GetInt64(4) != 0));
         }
 
         return list;
@@ -379,23 +377,34 @@ public sealed class VoiceScanDatabase : IDisposable
             delCmd.Parameters.AddWithValue("@cid", cacheId);
             await delCmd.ExecuteNonQueryAsync(cancellationToken);
 
-            // Batch insert window embeddings
+            // Batch insert window embeddings using a single reusable parameterized command
+            using var insWinCmd = connection.CreateCommand();
+            insWinCmd.Transaction = tx;
+            insWinCmd.CommandText = @"
+                INSERT INTO cached_window_embeddings (cache_id, window_index, start_time_seconds, end_time_seconds, embedding, snr_db, suspected_overlap)
+                VALUES (@cid, @widx, @start, @end, @emb, @snr, @ovl);";
+
+            var pCid = insWinCmd.Parameters.Add("@cid", SqliteType.Integer);
+            var pWidx = insWinCmd.Parameters.Add("@widx", SqliteType.Integer);
+            var pStart = insWinCmd.Parameters.Add("@start", SqliteType.Real);
+            var pEnd = insWinCmd.Parameters.Add("@end", SqliteType.Real);
+            var pEmb = insWinCmd.Parameters.Add("@emb", SqliteType.Blob);
+            var pSnr = insWinCmd.Parameters.Add("@snr", SqliteType.Real);
+            var pOvl = insWinCmd.Parameters.Add("@ovl", SqliteType.Integer);
+
+            pCid.Value = cacheId;
+
             for (int i = 0; i < windows.Count; i++)
             {
                 var w = windows[i];
                 byte[] embBytes = FloatArrayToBytes(w.Embedding);
 
-                using var insWinCmd = connection.CreateCommand();
-                insWinCmd.Transaction = tx;
-                insWinCmd.CommandText = @"
-                    INSERT INTO cached_window_embeddings (cache_id, window_index, start_time_seconds, end_time_seconds, embedding)
-                    VALUES (@cid, @widx, @start, @end, @emb);";
-
-                insWinCmd.Parameters.AddWithValue("@cid", cacheId);
-                insWinCmd.Parameters.AddWithValue("@widx", i);
-                insWinCmd.Parameters.AddWithValue("@start", w.StartTimeSeconds);
-                insWinCmd.Parameters.AddWithValue("@end", w.EndTimeSeconds);
-                insWinCmd.Parameters.AddWithValue("@emb", embBytes);
+                pWidx.Value = i;
+                pStart.Value = w.StartTimeSeconds;
+                pEnd.Value = w.EndTimeSeconds;
+                pEmb.Value = embBytes;
+                pSnr.Value = w.SnrDb;
+                pOvl.Value = w.SuspectedOverlap ? 1 : 0;
 
                 await insWinCmd.ExecuteNonQueryAsync(cancellationToken);
             }

@@ -147,8 +147,20 @@ public sealed class BackgroundScanController : IBackgroundScanController
                         };
                     }
 
-                    // Generate waveform envelope asynchronously
-                    var waveform = await _waveformService.GenerateEnvelopeAsync(filePath, 300, ct);
+                    // Use waveform envelope computed during scan pass, or fall back to service
+                    WaveformEnvelope waveform;
+                    if (scanResult.WaveformMinPeaks != null && scanResult.WaveformMaxPeaks != null && scanResult.WaveformMinPeaks.Length > 0)
+                    {
+                        waveform = new WaveformEnvelope(
+                            scanResult.WaveformMinPeaks,
+                            scanResult.WaveformMaxPeaks,
+                            scanResult.DurationSeconds,
+                            scanResult.WaveformMinPeaks.Length);
+                    }
+                    else
+                    {
+                        waveform = await _waveformService.GenerateEnvelopeAsync(filePath, 300, ct);
+                    }
 
                     // Map to HitSegmentResult
                     List<HitSegmentResult> hits = [];

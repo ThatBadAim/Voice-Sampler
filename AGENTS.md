@@ -1,9 +1,9 @@
 # AGENTS.md — Agent Operating Guidelines for VoiceScan
 
 ## 1. Project Summary & Stack
-VoiceScan is a fully offline Windows application that enrolls a person's voice and scans hours of audio (especially gameplay recordings with voice chat mixed with game audio) to pinpoint where they speak.
+VoiceScan is a fully offline cross-platform (Windows + Linux) application that enrolls a person's voice and scans hours of audio (especially gameplay recordings with voice chat mixed with game audio) to pinpoint where they speak.
 - **Engine & CLI:** C# / .NET 8+ (`/engine`), ONNX Runtime with CUDA EP for GPU inference, SQLite for profiles and embedding cache, FFmpeg for chunked audio decode.
-- **Desktop UI:** WinUI 3 (`/app`, Phase 3).
+- **Desktop UI:** Avalonia UI 12 (`/app/VoiceScan.Avalonia`), one codebase for Windows and Linux; view models and services live in `/app/VoiceScan.App.Core`.
 - **Research & Eval:** Python (`/research` experiments, `/eval` synthetic data and harness). Python outputs ONNX models and configs; the C# engine loads models directly.
 - **Strict Offline Privacy:** 100% offline runtime. No network calls, no telemetry.
 
@@ -11,7 +11,6 @@ VoiceScan is a fully offline Windows application that enrolls a person's voice a
 - **Build Solution:** `dotnet build VoiceScan.sln`
 - **Run Engine Tests:** `dotnet test VoiceScan.sln`
 - **Run Engine CLI:** `dotnet run --project engine/VoiceScan.Cli -- [args]`
-- **Run Re-Scan Demo:** `dotnet run --project engine/VoiceScan.Cli -- demo-rescan --input <folder> --profile1 <p1.json> --profile2 <p2.json>`
 - **Export Evidence Report:** `dotnet run --project engine/VoiceScan.Cli -- report export --results <scan.json> --output <dir> --profile <name>`
 - **Query Architecture:** `graphify query "<question>"` | `graphify path "<NodeA>" "<NodeB>"`
 - **Update Graph:** `graphify update .` (must run before completing any task)

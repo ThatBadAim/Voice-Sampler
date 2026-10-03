@@ -26,6 +26,33 @@ public static class SimilarityScorer
     }
 
     /// <summary>
+    /// Centered moving average of per-window scores over up to <paramref name="radius"/> temporal neighbours on each side.
+    /// Neighbours are only pooled while consecutive window starts are at most <paramref name="maxGapSec"/> apart,
+    /// so evidence never bridges long silences or removed non-speech. Windows must be sorted by start time.
+    /// </summary>
+    public static double[] SmoothScores(IReadOnlyList<double> starts, IReadOnlyList<double> scores, int radius, double maxGapSec)
+    {
+        var smoothed = new double[scores.Count];
+        for (int i = 0; i < scores.Count; i++)
+        {
+            double sum = scores[i];
+            int count = 1;
+            for (int j = i - 1; j >= Math.Max(0, i - radius) && starts[j + 1] - starts[j] <= maxGapSec; j--)
+            {
+                sum += scores[j];
+                count++;
+            }
+            for (int j = i + 1; j <= Math.Min(scores.Count - 1, i + radius) && starts[j] - starts[j - 1] <= maxGapSec; j++)
+            {
+                sum += scores[j];
+                count++;
+            }
+            smoothed[i] = sum / count;
+        }
+        return smoothed;
+    }
+
+    /// <summary>
     /// Merges consecutive or overlapping hit windows into continuous detected speech segments.
     /// </summary>
     public static List<DetectedSegment> MergeAdjacentHits(

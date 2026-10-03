@@ -28,17 +28,9 @@ public sealed record AudioQualityReport(
     IReadOnlyList<string> FeedbackMessages,
     bool IsAcceptableForEnrollment);
 
-public sealed record ConsentRecord(
-    bool ConsentGranted,
-    string ConsentStatement,
-    string SubjectIdentifier,
-    DateTimeOffset ConsentTimestampUtc,
-    string OperatorUsername);
-
 public sealed record VoiceProfileSummary(
     string Name,
     string Path,
     int Dimension,
     int WindowCount,
-    DateTimeOffset CreatedAtUtc,
-    bool MultiConditionAugmented);
+    DateTimeOffset CreatedAtUtc);

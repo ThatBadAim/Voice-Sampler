@@ -49,6 +49,30 @@ public class CoreEngineTests
         }
     }
 
+    [Theory]
+    [InlineData("fbank", FbankProfile.WeSpeaker)]
+    [InlineData("fbank_campplus", FbankProfile.CamPlusPlus)]
+    public void Filterbank_MatchesKaldiNativeFbankGolden(string expectedKey, FbankProfile profile)
+    {
+        using var doc = System.Text.Json.JsonDocument.Parse(File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "fbank_golden.json")));
+        float[] audio = doc.RootElement.GetProperty("audio").EnumerateArray().Select(e => e.GetSingle()).ToArray();
+        float[][] expected = doc.RootElement.GetProperty(expectedKey).EnumerateArray()
+            .Select(r => r.EnumerateArray().Select(e => e.GetSingle()).ToArray()).ToArray();
+
+        float[,] actual = Filterbank.ComputeFbank(audio, profile);
+
+        Assert.Equal(expected.Length, actual.GetLength(0));
+        float maxDiff = 0f;
+        for (int f = 0; f < expected.Length; f++)
+        {
+            for (int m = 0; m < 80; m++)
+            {
+                maxDiff = MathF.Max(maxDiff, MathF.Abs(expected[f][m] - actual[f, m]));
+            }
+        }
+        Assert.True(maxDiff < 2e-3f, $"Max deviation from kaldi-native-fbank was {maxDiff}");
+    }
+
     [Fact]
     public async Task AudioDecoder_StreamsChunksFromWavFile()
     {
@@ -107,19 +131,69 @@ public class CoreEngineTests
     }
 
     [Fact]
-    public void SpeechWindowExtractor_PadsShortIntervals()
+    public void SpeechWindowExtractor_TilesShortIntervalsAndReportsRealExtent()
     {
         int sr = 16000;
-        float[] dummyAudio = new float[2 * sr];
+        float[] audio = new float[2 * sr];
+        for (int i = 0; i < audio.Length; i++) audio[i] = i + 1;
 
-        var intervals = new[]
-        {
-            new SpeechInterval(0.2, 1.0) // 0.8s duration (< 2.0s)
-        };
+        var windows = SpeechWindowExtractor.ExtractWindows(audio, new[] { new SpeechInterval(0.2, 1.0) }, sampleRate: sr);
 
-        var windows = SpeechWindowExtractor.ExtractWindows(dummyAudio, intervals, sampleRate: sr, windowSec: 2.0, hopSec: 1.0);
         Assert.Single(windows);
-        Assert.Equal(32000, windows[0].AudioSamples.Length); // Padded to 2.0s
+        Assert.Equal(32000, windows[0].AudioSamples.Length);
+        Assert.Equal(0.2, windows[0].StartTimeSeconds, precision: 3);
+        Assert.Equal(1.0, windows[0].EndTimeSeconds, precision: 3);
+        Assert.All(windows[0].AudioSamples, v => Assert.NotEqual(0f, v));
+    }
+
+    [Fact]
+    public void SpeechWindowExtractor_SkipsSegmentsBelowMinimum()
+    {
+        float[] audio = new float[16000];
+        var windows = SpeechWindowExtractor.ExtractWindows(audio, new[] { new SpeechInterval(0.0, 0.4) });
+        Assert.Empty(windows);
+    }
+
+    [Fact]
+    public void SpeechWindowExtractor_AddsEndAlignedTailWindow()
+    {
+        int sr = 16000;
+        float[] audio = new float[5 * sr];
+
+        var windows = SpeechWindowExtractor.ExtractWindows(audio, new[] { new SpeechInterval(0.0, 3.6) }, sampleRate: sr);
+
+        // Hop grid covers [0,2] and [1,3]; the last 0.6 s is covered by [1.6, 3.6].
+        Assert.Equal(3, windows.Count);
+        Assert.Equal(1.6, windows[2].StartTimeSeconds, precision: 3);
+        Assert.Equal(3.6, windows[2].EndTimeSeconds, precision: 3);
+    }
+
+    [Fact]
+    public void SileroVad_Hysteresis_BridgesShortDipsAndDropsBlips()
+    {
+        // 32 ms frames. Speech with a one-frame dip (kept), a long gap, then a 3-frame blip (< 0.25 s, dropped).
+        var probs = new float[100];
+        for (int i = 5; i < 30; i++) probs[i] = 0.9f;
+        probs[15] = 0.4f; // between negative threshold (0.35) and threshold: stays in speech
+        for (int i = 70; i < 73; i++) probs[i] = 0.9f;
+
+        var intervals = SileroVad.ProbabilitiesToIntervals(probs, totalSeconds: 100 * 0.032, threshold: 0.5f);
+
+        Assert.Single(intervals);
+        Assert.Equal(5 * 0.032 - 0.03, intervals[0].StartTimeSeconds, precision: 3);
+        Assert.Equal(30 * 0.032 + 0.03, intervals[0].EndTimeSeconds, precision: 3);
+    }
+
+    [Fact]
+    public void SileroVad_RealSpeech_IsDetectedAndPureToneIsNot()
+    {
+        using var vad = new SileroVad();
+        float[] speech = AudioDecoder.DecodeEntireFileAsync(Path.Combine(AppContext.BaseDirectory, "fixtures", "jfk_speech.wav")).GetAwaiter().GetResult();
+        float[] tone = new float[16000 * 5];
+        for (int i = 0; i < tone.Length; i++) tone[i] = 0.4f * MathF.Sin(2f * MathF.PI * 440f * i / 16000);
+
+        Assert.NotEmpty(vad.DetectSpeechIntervals(speech));
+        Assert.Empty(vad.DetectSpeechIntervals(tone));
     }
 
     [Fact]
@@ -446,5 +520,109 @@ public class CoreEngineTests
 
         float[] codec = AudioAugmenter.ApplyCodecDegradation(audio);
         Assert.Equal(audio.Length, codec.Length);
+    }
+
+    [Fact]
+    public void ScoreNormalizer_NormalizeScoreWithTargetStats_MatchesNormalizeScore()
+    {
+        var rng = new Random(42);
+        int dim = 192;
+        var cohort = new List<float[]>();
+        for (int i = 0; i < 10; i++)
+        {
+            float[] vec = new float[dim];
+            for (int d = 0; d < dim; d++) vec[d] = (float)rng.NextDouble();
+            cohort.Add(vec);
+        }
+
+        var normalizer = new ScoreNormalizer(cohort, topK: 5);
+        float[] target = new float[dim];
+        float[] test = new float[dim];
+        for (int d = 0; d < dim; d++)
+        {
+            target[d] = (float)rng.NextDouble();
+            test[d] = (float)rng.NextDouble();
+        }
+
+        float rawScore = 0.72f;
+        double zDefault = normalizer.NormalizeScore(rawScore, target, test);
+
+        var targetStats = normalizer.ComputeCohortStats(target);
+        double zCached = normalizer.NormalizeScoreWithTargetStats(rawScore, targetStats, test);
+
+        Assert.Equal(zDefault, zCached, precision: 6);
+    }
+
+    [Fact]
+    public void SpeakerClusterer_NearestNeighborClustering_ProducesValidClusters()
+    {
+        var rng = new Random(123);
+        int dim = 64;
+
+        // Create 2 distinct orthogonal speakers (each with 3 windows)
+        float[] speakerA = new float[dim];
+        float[] speakerB = new float[dim];
+        for (int d = 0; d < dim / 2; d++) speakerA[d] = 1.0f;
+        for (int d = dim / 2; d < dim; d++) speakerB[d] = 1.0f;
+
+        // Unit normalize
+        float normA = MathF.Sqrt(speakerA.Sum(x => x * x));
+        float normB = MathF.Sqrt(speakerB.Sum(x => x * x));
+        for (int d = 0; d < dim; d++)
+        {
+            speakerA[d] /= normA;
+            speakerB[d] /= normB;
+        }
+
+        var windows = new List<WindowItem>();
+        for (int i = 0; i < 3; i++)
+        {
+            float[] w = (float[])speakerA.Clone();
+            w[0] += (float)(rng.NextDouble() * 0.01);
+            windows.Add(new WindowItem(windows.Count, i * 2.0, (i + 1) * 2.0, w));
+        }
+        for (int i = 0; i < 3; i++)
+        {
+            float[] w = (float[])speakerB.Clone();
+            w[0] += (float)(rng.NextDouble() * 0.01);
+            windows.Add(new WindowItem(windows.Count, (i + 3) * 2.0, (i + 4) * 2.0, w));
+        }
+
+        var clusters = SpeakerClusterer.ClusterWindows(windows, distanceThreshold: 0.15);
+        Assert.Equal(2, clusters.Count);
+        Assert.All(clusters, c => Assert.Equal(3, c.Windows.Count));
+    }
+
+    [Fact]
+    public async Task AudioDecoder_GetMediaDurationSecondsAsync_ReturnsAccurateDuration()
+    {
+        var root = FindRepoRoot();
+        var testWav = Path.Combine(root, "eval", "dev_dataset", "audio", "dev_clip_0000.wav");
+        Assert.True(File.Exists(testWav));
+
+        double duration = await AudioDecoder.GetMediaDurationSecondsAsync(testWav);
+        Assert.True(duration > 9.0 && duration < 11.0, $"Expected ~10s duration, got {duration}");
+    }
+
+    [Fact]
+    public async Task AudioDecoder_ExtractAudioSegmentAsync_ExtractsValidClip()
+    {
+        var root = FindRepoRoot();
+        var testWav = Path.Combine(root, "eval", "dev_dataset", "audio", "dev_clip_0000.wav");
+        Assert.True(File.Exists(testWav));
+
+        string tempClip = Path.Combine(Path.GetTempPath(), $"voicescan_test_clip_{Guid.NewGuid():N}.wav");
+        try
+        {
+            await AudioDecoder.ExtractAudioSegmentAsync(testWav, tempClip, startTimeSeconds: 1.0, durationSeconds: 2.0);
+            Assert.True(File.Exists(tempClip));
+
+            double dur = await AudioDecoder.GetMediaDurationSecondsAsync(tempClip);
+            Assert.True(dur > 1.8 && dur < 2.2, $"Expected ~2s extracted clip, got {dur}");
+        }
+        finally
+        {
+            if (File.Exists(tempClip)) File.Delete(tempClip);
+        }
     }
 }

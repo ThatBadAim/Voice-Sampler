@@ -1,12 +1,12 @@
 # VoiceScan Base Version Documentation
 
-VoiceScan is a 100% offline, privacy-first Windows desktop application and CLI engine designed to enroll target voices and scan hours of recorded gameplay and mixed audio to pinpoint where specific speakers talk.
+VoiceScan is a 100% offline, privacy-first cross-platform (Windows + Linux) desktop application and CLI engine designed to enroll target voices and scan hours of recorded gameplay and mixed audio to pinpoint where specific speakers talk.
 
 ---
 
 ## 1. System Requirements & Prerequisites
 
-- **Operating System:** Windows 10/11 (x64) or Linux (Ubuntu 22.04+ / Debian 12+) for Engine & CLI.
+- **Operating System:** Windows 10/11 (x64) or Linux (Ubuntu 22.04+ / Debian 12+) for Engine, CLI and Desktop App. The desktop app also needs `ffmpeg` (and `ffplay` for audio playback) on `PATH`; X11 or Wayland is required on Linux.
 - **Runtime / SDK:** .NET 8.0 SDK or .NET 10.0 SDK.
 - **Native Dependencies:** 
   - `ffmpeg` on system `PATH` (used for audio decoding and segment clip slicing).
@@ -25,7 +25,7 @@ dotnet build VoiceScan.sln
 
 ### 2.2 Run Unit & Integration Tests
 ```bash
-# Execute the full test suite (33 tests covering core engine, models, app layer, exports, benchmarks)
+# Execute the full test suite (33 tests covering core engine, models, app layer, exports)
 dotnet test VoiceScan.sln
 ```
 
@@ -36,7 +36,7 @@ dotnet test VoiceScan.sln
 dotnet run --project engine/VoiceScan.Cli -- enroll \
   --audio /path/to/sample1.wav /path/to/sample2.wav \
   --name "TargetPlayer" \
-  --output profiles/target_player.json \
+  --output my_profile.json \
   --multi-condition
 ```
 
@@ -44,35 +44,30 @@ dotnet run --project engine/VoiceScan.Cli -- enroll \
 ```bash
 dotnet run --project engine/VoiceScan.Cli -- scan \
   --input /path/to/recordings/ \
-  --profile profiles/target_player.json \
-  --output reports/scan_results.json \
-  --export reports/evidence_export/ \
+  --profile my_profile.json \
+  --output scan_results.json \
+  --export evidence_export/ \
   --threshold 0.48
-```
-
-#### Run the Instant Re-Scan Benchmark Demo
-```bash
-dotnet run --project engine/VoiceScan.Cli -- demo-rescan \
-  --input eval/dev_dataset/audio \
-  --profile1 profiles/speaker_charlie.json \
-  --profile2 profiles/speaker_delta.json \
-  --db scratch/rescan_cache.db
 ```
 
 #### Export Standalone Evidence Reports from Prior Scans
 ```bash
 dotnet run --project engine/VoiceScan.Cli -- report export \
-  --results reports/scan_results.json \
+  --results scan_results.json \
   --output reports/evidence/ \
   --profile "TargetPlayer"
 ```
 
-### 2.4 Run the Desktop Application (WinUI 3)
-On Windows:
-```powershell
-dotnet run --project app/VoiceScan.App
+### 2.4 Run the Desktop Application (Avalonia)
+On Windows and Linux:
+```bash
+dotnet run --project app/VoiceScan.Avalonia
 ```
-*Note: On Linux developer environments, the headless mock and UI layer abstraction can be verified through `VoiceScan.Tests` and the generated visual screenshots in `docs/screenshots/`.*
+GPU build (CUDA 12 + cuDNN 9 required at runtime):
+```bash
+dotnet run --project app/VoiceScan.Avalonia -p:VoiceScanGpu=true
+```
+Data lives under `LocalApplicationData/VoiceScan` (`~/.local/share/VoiceScan` on Linux, `%LOCALAPPDATA%\VoiceScan` on Windows). Self-contained packages: `scripts/publish-linux.sh`, `scripts/publish-win.ps1`.
 
 ---
 
@@ -105,7 +100,7 @@ dotnet run --project app/VoiceScan.App
 | **Inference Engine** | Microsoft ONNX Runtime (CUDA / CPU) | **MIT** | Native GPU-accelerated and CPU-fallback inference. |
 | **Media Demuxing & Decoding** | FFmpeg (via CLI sub-process) | **LGPL v2.1+ / GPL v2+** | Unmodified executable invocation. Fully compliant with dynamic linking/process execution rules. |
 | **Cache & Review Storage** | Microsoft.Data.Sqlite (SQLite 3) | **Public Domain** | Zero-configuration offline local database storage. |
-| **Desktop Framework** | Microsoft Windows App SDK / WinUI 3 | **MIT** | Modern desktop user interface. |
+| **Desktop Framework** | Avalonia UI 12 (+ SkiaSharp) | **MIT** | Cross-platform desktop user interface. |
 
 ---
 
@@ -114,13 +109,11 @@ dotnet run --project app/VoiceScan.App
 | Demo Step / Requirement | Status | Verification Reference |
 | :--- | :---: | :--- |
 | **1. Strict Offline Privacy** | **VERIFIED** | Zero network dependencies, zero telemetry endpoints, all inference local via ONNX Runtime & SQLite. |
-| **2. Voice Enrollment Wizard** | **VERIFIED** | Mandatory consent check, real-time audio quality gate (duration & noise feedback), named profile persistence. UI screenshot: `docs/screenshots/01_enrollment_wizard.png`. |
-| **3. Scan Dashboard & ETA** | **VERIFIED** | Folder / file selection, multi-profile targets, realtime processing multiple (> 10x-50x), cancel and resume capability. UI screenshot: `docs/screenshots/02_scan_dashboard.png`. |
-| **4. Interactive Results & Timeline** | **VERIFIED** | Tri-state verdict badges (`Match`, `Possible`, `No match`), interactive waveform canvas, hit segment markers, click-to-play. UI screenshot: `docs/screenshots/03_results_waveform.png`. |
-| **5. Review Queue & SQLite Feedback** | **VERIFIED** | Confirm/Reject segments, incremental profile centroid refinement, negative cohort caching, persistent storage in `ReviewSqliteRepository`. UI screenshot: `docs/screenshots/04_review_queue.png`. |
+| **2. Voice Enrollment Wizard** | **VERIFIED** | Mandatory consent check, real-time audio quality gate (duration & noise feedback), named profile persistence. |
+| **3. Scan Dashboard & ETA** | **VERIFIED** | Folder / file selection, multi-profile targets, realtime processing multiple (> 10x-50x), cancel and resume capability. |
+| **4. Interactive Results & Timeline** | **VERIFIED** | Tri-state verdict badges (`Match`, `Possible`, `No match`), interactive waveform canvas, hit segment markers, click-to-play. |
+| **5. Review Queue & SQLite Feedback** | **VERIFIED** | Confirm/Reject segments, incremental profile centroid refinement, negative cohort caching, persistent storage in `ReviewSqliteRepository`. |
 | **6. Evidence Report Export (PDF & CSV)** | **VERIFIED** | Full audit export: SHA-256 hashes, timestamps, confidence, reason flags, settings snapshot, and sliced 16kHz WAV audio hits in `audio_hits/`. Implemented in `EvidenceReportExporter`. |
-| **7. Benchmark & Accuracy Screen** | **VERIFIED** | Real measured harness numbers loaded from `eval/reports/*/eval_results.json`, per-SNR performance breakdown with 95% bootstrap confidence intervals. UI screenshot: `docs/screenshots/05_benchmark_screen.png`. |
-| **8. Instant Re-Scan Demo Path** | **VERIFIED** | Demonstrated 1199.9x speedup (99.9% time saved) by skipping decode and VAD, scoring cached embeddings in SQLite. CLI command: `demo-rescan`. |
 | **9. Resilient Error Handling & Logging** | **VERIFIED** | Corrupt/missing files gracefully handled, zero-length files warned, missing GPU falls back cleanly to CPU with warning, thread-safe logging to `logs/voicescan.log`. |
 | **10. Final Test-Set Evaluation** | **RESERVED** | `--final` test set evaluation deliberately reserved for user execution per project specification. |
 
@@ -142,9 +135,8 @@ dotnet run --project app/VoiceScan.App
   - `Services/ProfileEnrollmentService.cs`: Multi-condition voice enrollment and centroid computation.
   - `Services/ReviewSqliteRepository.cs`: Ground truth human decision repository.
   - `Services/EvidenceReportExporter.cs`: Standalone PDF 1.4 + CSV + WAV clip export service.
-  - `Services/BenchmarkService.cs`: Evaluation harness JSON loader with bootstrap confidence intervals.
-  - `ViewModels/`: MVVM ViewModels for Wizard, Scan, Results, Review, and Benchmark screens.
-- `app/VoiceScan.App/`:
-  - WinUI 3 XAML desktop user interface.
+  - `ViewModels/`: MVVM ViewModels for Enrollment, Scan, Results, and Review screens.
+- `app/VoiceScan.Avalonia/`:
+  - Avalonia desktop user interface (Windows + Linux).
 - `engine/VoiceScan.Cli/`:
-  - Unified CLI (`enroll`, `scan`, `demo-rescan`, `report export`).
+  - Unified CLI (`enroll`, `scan`, `report export`).

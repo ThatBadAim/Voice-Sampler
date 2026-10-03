@@ -16,6 +16,7 @@ public static class Program
 {
     public static async Task<int> Main(string[] args)
     {
+        AppPaths.UseBundledTools();
         VoiceScanLogger.Initialize("logs/voicescan.log");
 
         if (args.Length == 0 || args[0] is "-h" or "--help")
@@ -36,7 +37,6 @@ public static class Program
                 "profiles" => await HandleProfilesCommandAsync(cmdArgs),
                 "cache" => await HandleCacheCommandAsync(cmdArgs),
                 "cohort" => await HandleCohortCommandAsync(cmdArgs),
-                "demo-rescan" or "rescan" => await HandleDemoRescanCommandAsync(cmdArgs),
                 "report" => await HandleReportCommandAsync(cmdArgs),
                 "list-tracks" or "tracks" => await HandleListTracksCommandAsync(cmdArgs),
                 _ => await HandleFallbackScanOrVerifyAsync(args)
@@ -56,8 +56,7 @@ public static class Program
         Console.WriteLine("VoiceScan CLI — Local Offline Voice Enrollment, Media Scanner & Embedding Cache");
         Console.WriteLine("Usage:");
         Console.WriteLine("  VoiceScan.Cli enroll --audio <files...> --name <profile_name> [--output <profile.json>] [--model <wespeaker|campplus>] [--db <path>]");
-        Console.WriteLine("  VoiceScan.Cli scan --input <folder_or_file> --profile <profile.json_or_name> --output <results.json> [--export <report_dir>] [--cohort <cohort.json>] [--threshold <val>] [--model <model_id>] [--track <index>] [--db <path>] [--no-cache]");
-        Console.WriteLine("  VoiceScan.Cli demo-rescan --input <folder> --profile1 <prof1.json> --profile2 <prof2.json> [--db <path>]");
+        Console.WriteLine("  VoiceScan.Cli scan --input <folder_or_file> --profile <profile.json_or_name> --output <results.json> [--export <report_dir>] [--cohort <cohort.json>] [--threshold <val>] [--smooth-radius <n>] [--model <model_id>] [--track <index>] [--db <path>] [--no-cache]");
         Console.WriteLine("  VoiceScan.Cli report export --results <results.json> --output <dir> [--profile <name>]");
         Console.WriteLine("  VoiceScan.Cli cohort build --audio <files_or_folders...> --output <cohort.json> [--model <wespeaker|campplus>]");
         Console.WriteLine("  VoiceScan.Cli profiles list [--db <path>]");
@@ -163,6 +162,7 @@ public static class Program
         bool enableClustering = true;
         bool enableTemporalSmoothing = true;
         double peakDelta = 0.04;
+        int scoreSmoothingRadius = PipelineScanner.DefaultScoreSmoothingRadius;
         string? cohortPath = null;
         bool multiCondition = false;
 
@@ -184,6 +184,9 @@ public static class Program
                     break;
                 case "--cluster-threshold":
                     if (i + 1 < args.Length && double.TryParse(args[++i], out var ct)) clusterThreshold = ct;
+                    break;
+                case "--smooth-radius":
+                    if (i + 1 < args.Length && int.TryParse(args[++i], out var sr)) scoreSmoothingRadius = sr;
                     break;
                 case "--no-clustering":
                     enableClustering = false;
@@ -325,7 +328,8 @@ public static class Program
             enableTemporalSmoothing: enableTemporalSmoothing,
             peakDelta: peakDelta,
             normalizer: normalizer,
-            clipProfileMap: clipProfileMap.Count > 0 ? clipProfileMap : null);
+            clipProfileMap: clipProfileMap.Count > 0 ? clipProfileMap : null,
+            scoreSmoothingRadius: scoreSmoothingRadius);
 
         var json = JsonSerializer.Serialize(document, new JsonSerializerOptions { WriteIndented = true });
         var outDir = Path.GetDirectoryName(outputPath);
@@ -427,9 +431,7 @@ public static class Program
             var candidates = new[]
             {
                 Path.Combine(inputDir, "enrollment", profileArg),
-                Path.Combine(inputDir, "..", "enrollment", profileArg),
-                Path.Combine(inputDir, "enrollment", "speaker_charlie"),
-                Path.Combine(inputDir, "..", "enrollment", "speaker_charlie")
+                Path.Combine(inputDir, "..", "enrollment", profileArg)
             };
 
             foreach (var cand in candidates)
@@ -724,71 +726,6 @@ public static class Program
             PrintUsage();
             return 1;
         }
-    }
-
-    private static async Task<int> HandleDemoRescanCommandAsync(string[] args)
-    {
-        string? inputPath = GetOptionValue(args, "--input");
-        string? prof1Arg = GetOptionValue(args, "--profile1");
-        string? prof2Arg = GetOptionValue(args, "--profile2");
-        string dbPath = GetOptionValue(args, "--db") ?? "voicescan_rescan_demo.db";
-
-        if (string.IsNullOrEmpty(inputPath) || string.IsNullOrEmpty(prof1Arg) || string.IsNullOrEmpty(prof2Arg))
-        {
-            Console.WriteLine("Usage: VoiceScan.Cli demo-rescan --input <folder> --profile1 <prof1.json> --profile2 <prof2.json> [--db <path>]");
-            return 1;
-        }
-
-        Console.WriteLine("==================================================================");
-        Console.WriteLine("         VoiceScan Instant Re-Scan Demo & Speed Benchmark         ");
-        Console.WriteLine("==================================================================");
-        Console.WriteLine($"Input Audio Library: {inputPath}");
-        Console.WriteLine($"Initial Profile:     {prof1Arg}");
-        Console.WriteLine($"Re-Scan Profile:     {prof2Arg}");
-        Console.WriteLine($"Embedding Cache DB:  {dbPath}");
-        Console.WriteLine();
-
-        using var db = new VoiceScanDatabase(dbPath);
-        await db.InitializeAsync();
-        using var vad = new SileroVad();
-        using var model = new OnnxEmbeddingModel();
-        var scanner = new PipelineScanner(model, vad, db);
-
-        // 1. Phase 1: Cold Initial Scan
-        Console.WriteLine("--- PHASE 1: Initial Scan (FFmpeg Decode + Silero VAD + Neural Extraction) ---");
-        var prof1 = VoiceProfile.LoadFromFile(prof1Arg);
-        var sw1 = System.Diagnostics.Stopwatch.StartNew();
-        var res1 = await scanner.ScanDirectoryAsync(inputPath, prof1, threshold: 0.48);
-        sw1.Stop();
-        double t1 = sw1.Elapsed.TotalSeconds;
-
-        Console.WriteLine($"[COMPLETE] Phase 1 Duration: {t1:F2} seconds ({res1.Files.Count} files processed).");
-        Console.WriteLine($"  - Audio decode & neural embeddings cached in SQLite.");
-        Console.WriteLine();
-
-        // 2. Phase 2: Instant Re-Scan
-        Console.WriteLine("--- PHASE 2: Instant Re-Scan (Bypassing Decode, VAD, Neural Extraction) ---");
-        var prof2 = VoiceProfile.LoadFromFile(prof2Arg);
-        var sw2 = System.Diagnostics.Stopwatch.StartNew();
-        var res2 = await scanner.ScanDirectoryAsync(inputPath, prof2, threshold: 0.48);
-        sw2.Stop();
-        double t2 = sw2.Elapsed.TotalSeconds;
-
-        double speedup = t2 > 0.0001 ? t1 / t2 : 999.0;
-        double timeSavedPct = Math.Max(0.0, (1.0 - (t2 / Math.Max(0.001, t1))) * 100.0);
-
-        Console.WriteLine($"[COMPLETE] Phase 2 Duration: {t2:F3} seconds ({res2.Files.Count} files scored).");
-        Console.WriteLine();
-        Console.WriteLine("==================================================================");
-        Console.WriteLine("                     RE-SCAN PERFORMANCE RESULTS                  ");
-        Console.WriteLine("==================================================================");
-        Console.WriteLine($"  • Cold Initial Scan Time:  {t1:F2} s");
-        Console.WriteLine($"  • Cached Re-Scan Time:     {t2:F3} s");
-        Console.WriteLine($"  • Re-Scan Speedup Factor:  {speedup:F1}x FASTER");
-        Console.WriteLine($"  • Total Time Saved:        {timeSavedPct:F1}%");
-        Console.WriteLine("==================================================================");
-
-        return 0;
     }
 
     private static async Task<int> HandleReportCommandAsync(string[] args)

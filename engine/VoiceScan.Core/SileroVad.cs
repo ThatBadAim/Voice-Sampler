@@ -15,7 +15,16 @@ public record SpeechInterval(double StartTimeSeconds, double EndTimeSeconds);
 public sealed class SileroVad : IDisposable
 {
     private const int FrameSize = 512; // 32ms @ 16kHz
+    private const int ContextSize = 64;
     private const int SampleRate = 16000;
+    private const double MinSpeechSec = 0.25;
+    // Longer than Silero's 0.1 s default so short pauses stay inside one speaker turn and windows span continuous talk.
+    private const double MinSilenceSec = 0.3;
+    private const double SpeechPadSec = 0.03;
+
+    /// <summary>Identifies every setting that changes VAD output; part of the embedding cache key.</summary>
+    public static string SettingsFingerprint =>
+        $"silero-v5-ctx{ContextSize}-min{MinSpeechSec}-sil{MinSilenceSec}-pad{SpeechPadSec}-hyst0.15";
 
     private readonly InferenceSession _session;
     private readonly bool _ownsSession;
@@ -36,7 +45,7 @@ public sealed class SileroVad : IDisposable
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"[WARNING] Silero VAD CUDA provider unavailable: {ex.Message}. Falling back to CPU.");
+            Console.WriteLine($"[WARNING] Silero VAD CUDA provider unavailable: {ex.Message}. Falling back to CPU. {OnnxEmbeddingModel.CudaSetupHint}");
             using var cpuOptions = new SessionOptions();
             _session = new InferenceSession(modelPath, cpuOptions);
         }
@@ -51,8 +60,9 @@ public sealed class SileroVad : IDisposable
     }
 
     /// <summary>
-    /// Detects contiguous speech intervals across an audio buffer.
-    /// Falls back to frame energy thresholding if the audio contains non-vocal synthetic test tones.
+    /// Detects contiguous speech intervals across an audio buffer using Silero's reference
+    /// post-processing: hysteresis (exit below threshold - 0.15), minimum speech length,
+    /// minimum silence length before a segment is closed, and symmetric padding.
     /// </summary>
     public IReadOnlyList<SpeechInterval> DetectSpeechIntervals(float[] audio, float threshold = 0.5f)
     {
@@ -61,154 +71,161 @@ public sealed class SileroVad : IDisposable
             return Array.Empty<SpeechInterval>();
         }
 
-        int numFrames = audio.Length / FrameSize;
-        float[] probabilities = new float[numFrames];
+        var stream = StartProbabilityStream();
+        stream.Feed(audio, audio.Length);
+        return ProbabilitiesToIntervals(stream.Finish(), (double)audio.Length / SampleRate, threshold);
+    }
 
-        // State tensor [2, 1, 128]
-        var stateTensor = new DenseTensor<float>(new float[2 * 1 * 128], [2, 1, 128]);
-        var srTensor = new DenseTensor<long>(new long[] { SampleRate }, Array.Empty<int>());
+    public ProbabilityStream StartProbabilityStream() => new(this);
 
-        float maxProb = 0f;
+    /// <summary>
+    /// Incremental frame-probability computation so arbitrarily long audio can be fed in chunks.
+    /// Silero v5 requires the last 64 samples of the previous frame prepended to every frame; without
+    /// that context the probabilities are unreliable. A partial last frame is zero-padded by <see cref="Finish"/>.
+    /// </summary>
+    public sealed class ProbabilityStream
+    {
+        private readonly SileroVad _owner;
+        private readonly DenseTensor<float> _state = new(new float[2 * 1 * 128], [2, 1, 128]);
+        private readonly DenseTensor<long> _sampleRate = new(new long[] { SampleRate }, Array.Empty<int>());
+        private readonly float[] _input = new float[ContextSize + FrameSize];
+        private readonly List<float> _probabilities = new();
+        private int _filled;
 
-        for (int i = 0; i < numFrames; i++)
+        internal ProbabilityStream(SileroVad owner)
         {
-            float[] frameData = new float[FrameSize];
-            Array.Copy(audio, i * FrameSize, frameData, 0, FrameSize);
+            _owner = owner;
+        }
 
-            var inputTensor = new DenseTensor<float>(frameData, [1, FrameSize]);
+        public void Feed(float[] samples, int count)
+        {
+            int offset = 0;
+            while (offset < count)
+            {
+                int take = Math.Min(FrameSize - _filled, count - offset);
+                Array.Copy(samples, offset, _input, ContextSize + _filled, take);
+                _filled += take;
+                offset += take;
+                if (_filled == FrameSize)
+                {
+                    RunFrame();
+                }
+            }
+        }
+
+        public float[] Finish()
+        {
+            if (_filled > 0)
+            {
+                Array.Clear(_input, ContextSize + _filled, FrameSize - _filled);
+                RunFrame();
+            }
+            return _probabilities.ToArray();
+        }
+
+        private void RunFrame()
+        {
+            var inputTensor = new DenseTensor<float>((float[])_input.Clone(), [1, ContextSize + FrameSize]);
             var inputs = new[]
             {
                 NamedOnnxValue.CreateFromTensor("input", inputTensor),
-                NamedOnnxValue.CreateFromTensor("state", stateTensor),
-                NamedOnnxValue.CreateFromTensor("sr", srTensor)
+                NamedOnnxValue.CreateFromTensor("state", _state),
+                NamedOnnxValue.CreateFromTensor("sr", _sampleRate)
             };
 
-            using var results = _session.Run(inputs);
-            var output = results.First(r => r.Name == "output").AsTensor<float>();
-            float prob = output.GetValue(0);
-            probabilities[i] = prob;
-            if (prob > maxProb) maxProb = prob;
+            using var results = _owner._session.Run(inputs);
+            _probabilities.Add(results.First(r => r.Name == "output").AsTensor<float>().GetValue(0));
 
-            // Update recurrent state for next frame
             var nextState = results.First(r => r.Name == "stateN" || r.Name.StartsWith("state")).AsTensor<float>();
             for (int s = 0; s < 2 * 1 * 128; s++)
             {
-                stateTensor.SetValue(s, nextState.GetValue(s));
+                _state.SetValue(s, nextState.GetValue(s));
+            }
+
+            Array.Copy(_input, FrameSize, _input, 0, ContextSize);
+            _filled = 0;
+        }
+    }
+
+    public static IReadOnlyList<SpeechInterval> ProbabilitiesToIntervals(
+        float[] probabilities,
+        double totalSeconds,
+        float threshold)
+    {
+        float negThreshold = Math.Max(threshold - 0.15f, 0.01f);
+        const double frameSec = (double)FrameSize / SampleRate;
+
+        var raw = new List<(double Start, double End)>();
+        bool triggered = false;
+        double start = 0.0;
+        double silenceStart = -1.0;
+
+        for (int i = 0; i < probabilities.Length; i++)
+        {
+            double t = i * frameSec;
+            float p = probabilities[i];
+
+            if (!triggered)
+            {
+                if (p >= threshold)
+                {
+                    triggered = true;
+                    start = t;
+                    silenceStart = -1.0;
+                }
+                continue;
+            }
+
+            if (p >= threshold)
+            {
+                silenceStart = -1.0;
+            }
+            else if (p < negThreshold)
+            {
+                if (silenceStart < 0.0)
+                {
+                    silenceStart = t;
+                }
+                if (t + frameSec - silenceStart >= MinSilenceSec)
+                {
+                    raw.Add((start, silenceStart));
+                    triggered = false;
+                    silenceStart = -1.0;
+                }
             }
         }
 
-        // If Silero VAD detects no speech (e.g. synthetic pure-tone test fixtures without vocal formants)
-        if (maxProb < 0.05f)
+        if (triggered)
         {
-            return FallbackEnergyActivity(audio, SampleRate);
+            raw.Add((start, silenceStart >= 0.0 ? silenceStart : totalSeconds));
         }
 
-        // Parse speech intervals
         var intervals = new List<SpeechInterval>();
-        bool inSpeech = false;
-        double startSec = 0.0;
-
-        for (int i = 0; i < numFrames; i++)
+        foreach (var (segStart, segEnd) in raw)
         {
-            double t = (double)(i * FrameSize) / SampleRate;
-            if (probabilities[i] >= threshold && !inSpeech)
+            if (segEnd - segStart < MinSpeechSec)
             {
-                inSpeech = true;
-                startSec = t;
+                continue;
             }
-            else if (probabilities[i] < threshold && inSpeech)
-            {
-                inSpeech = false;
-                intervals.Add(new SpeechInterval(startSec, t));
-            }
-        }
 
-        if (inSpeech)
-        {
-            intervals.Add(new SpeechInterval(startSec, (double)(numFrames * FrameSize) / SampleRate));
+            double paddedStart = Math.Max(0.0, segStart - SpeechPadSec);
+            double paddedEnd = Math.Min(totalSeconds, segEnd + SpeechPadSec);
+            if (intervals.Count > 0 && paddedStart <= intervals[^1].EndTimeSeconds)
+            {
+                intervals[^1] = new SpeechInterval(intervals[^1].StartTimeSeconds, paddedEnd);
+            }
+            else
+            {
+                intervals.Add(new SpeechInterval(paddedStart, paddedEnd));
+            }
         }
 
         return intervals;
     }
 
-    private static IReadOnlyList<SpeechInterval> FallbackEnergyActivity(float[] audio, int sampleRate)
-    {
-        int frameLen = (int)(sampleRate * 0.025f);
-        int hopLen = (int)(sampleRate * 0.010f);
-        int numFrames = 1 + Math.Max(0, (audio.Length - frameLen) / hopLen);
-
-        float peak = 0f;
-        for (int i = 0; i < audio.Length; i++)
-        {
-            float abs = MathF.Abs(audio[i]);
-            if (abs > peak) peak = abs;
-        }
-
-        if (peak < 1e-6f)
-        {
-            return Array.Empty<SpeechInterval>();
-        }
-
-        bool[] active = new bool[numFrames];
-        for (int i = 0; i < numFrames; i++)
-        {
-            int start = i * hopLen;
-            float sumSq = 0f;
-            for (int k = 0; k < frameLen && (start + k) < audio.Length; k++)
-            {
-                float v = audio[start + k];
-                sumSq += v * v;
-            }
-            float rms = MathF.Sqrt((sumSq / frameLen) + 1e-12f);
-            float rmsDb = 20.0f * MathF.Log10(rms / (peak + 1e-12f));
-            if (rmsDb >= -35.0f)
-            {
-                active[i] = true;
-            }
-        }
-
-        var list = new List<SpeechInterval>();
-        bool inActive = false;
-        double segStart = 0.0;
-
-        for (int i = 0; i < numFrames; i++)
-        {
-            double t = (double)(i * hopLen) / sampleRate;
-            if (active[i] && !inActive)
-            {
-                inActive = true;
-                segStart = t;
-            }
-            else if (!active[i] && inActive)
-            {
-                inActive = false;
-                list.Add(new SpeechInterval(segStart, t));
-            }
-        }
-
-        if (inActive)
-        {
-            list.Add(new SpeechInterval(segStart, (double)audio.Length / sampleRate));
-        }
-
-        return list;
-    }
-
     private static string ResolveVadModelPath()
     {
-        var candidates = new[]
-        {
-            Path.Combine(AppContext.BaseDirectory, "models", "silero_vad.onnx"),
-            Path.Combine(Directory.GetCurrentDirectory(), "models", "silero_vad.onnx"),
-            Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "models", "silero_vad.onnx")
-        };
-
-        foreach (var c in candidates)
-        {
-            if (File.Exists(c)) return Path.GetFullPath(c);
-        }
-
-        return Path.GetFullPath("models/silero_vad.onnx");
+        return AppPaths.FindModel("silero_vad.onnx") ?? Path.GetFullPath("models/silero_vad.onnx");
     }
 
     public void Dispose()

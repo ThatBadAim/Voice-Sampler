@@ -59,6 +59,14 @@ public sealed class FileScanResult
 
     [JsonPropertyName("segments")]
     public List<DetectedSegment> Segments { get; set; } = new();
+
+    [JsonPropertyName("waveform_min_peaks")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public float[]? WaveformMinPeaks { get; set; }
+
+    [JsonPropertyName("waveform_max_peaks")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public float[]? WaveformMaxPeaks { get; set; }
 }
 
 public sealed class DetectedSegment

@@ -12,8 +12,12 @@ using Microsoft.ML.OnnxRuntime.Tensors;
 /// </summary>
 public sealed class OnnxEmbeddingModel : ISpeakerEmbeddingModel
 {
+    public const string CudaSetupHint =
+        "GPU needs a build with -p:VoiceScanGpu=true plus CUDA 12 and cuDNN 9 (on Linux: libraries visible via LD_LIBRARY_PATH).";
+
     private readonly InferenceSession _session;
     private readonly string _inputName;
+    private readonly FbankProfile _fbankProfile;
 
     public string ModelId { get; }
     public int EmbeddingDimension { get; }
@@ -32,6 +36,7 @@ public sealed class OnnxEmbeddingModel : ISpeakerEmbeddingModel
         if (fileName.Contains("campplus", StringComparison.OrdinalIgnoreCase))
         {
             ModelId = "3dspeaker-campplus";
+            _fbankProfile = FbankProfile.CamPlusPlus;
             EmbeddingDimension = 192;
         }
         else if (fileName.Contains("wespeaker", StringComparison.OrdinalIgnoreCase))
@@ -58,7 +63,7 @@ public sealed class OnnxEmbeddingModel : ISpeakerEmbeddingModel
         }
         catch (Exception ex)
         {
-            string warnMsg = $"CUDAExecutionProvider failed for {ModelId}: {ex.Message}. Falling back cleanly to CPUExecutionProvider.";
+            string warnMsg = $"CUDAExecutionProvider failed for {ModelId}: {ex.Message}. Falling back cleanly to CPUExecutionProvider. {CudaSetupHint}";
             Console.WriteLine($"[WARNING] {warnMsg}");
             Logging.VoiceScanLogger.Warn("OnnxEmbeddingModel", warnMsg);
             using var cpuOptions = new SessionOptions();
@@ -93,7 +98,7 @@ public sealed class OnnxEmbeddingModel : ISpeakerEmbeddingModel
 
         for (int b = 0; b < batchSize; b++)
         {
-            fbanks[b] = Filterbank.ComputeFbank(audioWindows[b]);
+            fbanks[b] = Filterbank.ComputeFbank(audioWindows[b], _fbankProfile);
             int frames = fbanks[b].GetLength(0);
             if (frames > maxFrames) maxFrames = frames;
         }
@@ -166,19 +171,7 @@ public sealed class OnnxEmbeddingModel : ISpeakerEmbeddingModel
             _ => "wespeaker_en_voxceleb_resnet34.onnx"
         };
 
-        var candidates = new[]
-        {
-            Path.Combine(AppContext.BaseDirectory, "models", targetFileName),
-            Path.Combine(Directory.GetCurrentDirectory(), "models", targetFileName),
-            Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "models", targetFileName)
-        };
-
-        foreach (var c in candidates)
-        {
-            if (File.Exists(c)) return Path.GetFullPath(c);
-        }
-
-        return Path.GetFullPath(Path.Combine("models", targetFileName));
+        return AppPaths.FindModel(targetFileName) ?? Path.GetFullPath(Path.Combine("models", targetFileName));
     }
 
     public void Dispose()

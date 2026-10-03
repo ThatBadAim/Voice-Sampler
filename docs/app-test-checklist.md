@@ -1,7 +1,7 @@
 # VoiceScan Desktop Application Manual Test Checklist & Acceptance Report
 
 **Date:** 2026-10-02  
-**Target Solution:** WinUI 3 Desktop Application (`/app`)  
+**Target Solution:** Avalonia Desktop Application (`/app/VoiceScan.Avalonia`, Windows + Linux)  
 **Engine & Core Library:** .NET 10 (`VoiceScan.Core`, `VoiceScan.App.Core`)  
 **Adherence to Guidelines:** 100% offline, zero network telemetry, full adherence to `DESIGN.md`.
 
@@ -33,7 +33,6 @@ The VoiceScan desktop application provides an intuitive, high-performance interf
 ## 2. Screen Walkthrough & UI Reference
 
 ### Screen 1: Voice Profile Enrollment Wizard
-![Enrollment Wizard](screenshots/01_enrollment_wizard.png)
 
 - **Workflow:**
   1. Operator chooses reference audio or records directly from microphone.
@@ -44,7 +43,6 @@ The VoiceScan desktop application provides an intuitive, high-performance interf
 ---
 
 ### Screen 2: Scan Dashboard & Telemetry
-![Scan Dashboard](screenshots/02_scan_dashboard.png)
 
 - **Workflow:**
   1. Operator specifies media directory (e.g. `eval/dev_dataset`) and selects the target profile.
@@ -59,7 +57,6 @@ The VoiceScan desktop application provides an intuitive, high-performance interf
 ---
 
 ### Screen 3: Results & Waveform Timeline
-![Results & Waveform Timeline](screenshots/03_results_waveform.png)
 
 - **Workflow:**
   1. Left panel provides instant search, sorting (Confidence, Verdict, Name, Duration), and filtering (`Match`, `Possible`, `No match`).
@@ -71,7 +68,6 @@ The VoiceScan desktop application provides an intuitive, high-performance interf
 ---
 
 ### Screen 4: Human Review & Active Verification Queue
-![Human Review Queue](screenshots/04_review_queue.png)
 
 - **Workflow:**
   1. Ambiguous `Possible` segments or low-confidence detections populate the review queue.
@@ -102,20 +98,20 @@ To satisfy acceptance on long gameplay archives without UI freezing:
 
 ## 4. Manual Verification Checklist
 
-Follow this checklist when conducting manual quality assurance on Windows 11:
+Follow this checklist when conducting manual quality assurance on Windows 11 and on Ubuntu 22.04+ / Debian 12+ (X11 and Wayland):
 
 ### A. Voice Profile Enrollment
-- [ ] 1. Navigate to **Voice Enrollment** in the left navigation menu.
-- [ ] 2. Click **Import Audio Clip(s)** and select a reference WAV file (e.g. `eval/data_config/speech/speaker_alpha/ref_01.wav`).
-- [ ] 3. Click **Run Acoustic Analysis**. Verify that Speech Duration, Estimated SNR, and Noise Floor tiles update, and that a descriptive diagnostic message appears.
-- [ ] 4. Verify that the **Generate & Save Voice Profile** button is **disabled**.
-- [ ] 5. Click the **Mandatory Biometric Consent Checkbox**. Verify the button becomes **enabled**.
-- [ ] 6. Click **Generate & Save Voice Profile**. Verify confirmation message and creation of profile file in `models/profiles/`.
+- [ ] 1. On a fresh install the app opens on **1. Add a voice**.
+- [ ] 2. Click **Choose file…** and select a recording of one person talking.
+- [ ] 3. Verify the quality check runs by itself: Speech Found, Clarity and Background Noise tiles update, with a plain-language message.
+- [ ] 4. Verify that **Save voice and continue** is **disabled** until a name is entered and consent is ticked.
+- [ ] 5. Tick the consent checkbox. Verify the button becomes **enabled**.
+- [ ] 6. Click **Save voice and continue**. Verify the app moves to **2. Scan recordings** with the new voice selected, and the profile file exists in the per-user `VoiceScan/profiles` folder (`%LOCALAPPDATA%` on Windows, `~/.local/share` on Linux).
 
 ### B. Scan Execution
-- [ ] 1. Navigate to **Scan Dashboard**.
-- [ ] 2. Enter a folder containing test audio (e.g. `eval/dev_dataset`).
-- [ ] 3. Enter target profile path.
+- [ ] 1. Open **2. Scan recordings**.
+- [ ] 2. Click **Choose folder…** and pick a folder with recordings.
+- [ ] 3. Verify the voice list shows the saved profile and **Start scan** is enabled.
 - [ ] 4. Click **Start Scan**. Verify background scan begins immediately without UI stutter.
 - [ ] 5. Verify that Speed Multiple updates, ETA counts down, and GPU utilization reflects hardware state.
 - [ ] 6. Click **Pause**. Verify scan halts and button toggles to **Resume**.
@@ -123,7 +119,7 @@ Follow this checklist when conducting manual quality assurance on Windows 11:
 - [ ] 8. Click **Cancel**. Verify scan stops cleanly with *"Scan cancelled by user"*.
 
 ### C. Results & Waveform Timeline
-- [ ] 1. Navigate to **Results & Timeline**.
+- [ ] 1. Navigate to **3. Results**.
 - [ ] 2. Select a file from the list. Verify that the waveform renders smoothly with amplitude peaks.
 - [ ] 3. Verify that hit segments are highlighted in translucent green (`Match`) or orange (`Possible`).
 - [ ] 4. Click on any section of the waveform. Verify that the cyan playback cursor seeks to that exact timestamp.
