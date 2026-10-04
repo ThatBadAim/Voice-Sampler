@@ -36,4 +36,4 @@ dotnet run --project app/VoiceScan.Avalonia
 
 Download the ONNX models listed in `models/manifest.json` into `models/` (checksums are in the manifest). Packaging: `scripts/publish-linux.sh` (tarball), `scripts/publish-win.ps1` (zip) and `scripts/build-installer.sh` (`dist/packages/VoiceScan-Setup.exe`, buildable from Linux). All refuse to package without the models.
 
-Design: `DESIGN.md`. Accuracy measurements: `docs/accuracy-log.md`. Model licenses: `docs/LICENSES.md` (the WeSpeaker weights are non-commercial).
+Design: `DESIGN.md`. Accuracy measurements: `docs/accuracy-log.md`. Model licenses: `docs/LICENSES.md`; third-party code notices: `THIRD-PARTY-NOTICES.md`.

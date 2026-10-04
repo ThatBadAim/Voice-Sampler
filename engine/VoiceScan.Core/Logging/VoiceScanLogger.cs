@@ -12,7 +12,7 @@ public enum LogLevel
 public static class VoiceScanLogger
 {
     private static readonly object _lock = new();
-    private static string _logFilePath = "logs/voicescan.log";
+    private static string _logFilePath = AppPaths.LogFilePath;
     private static bool _initialized;
 
     public static string LogFilePath

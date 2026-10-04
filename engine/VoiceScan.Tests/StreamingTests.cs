@@ -9,21 +9,21 @@ using Xunit;
 public class StreamingTests
 {
     [Fact]
-    public void SileroVad_ChunkedFeed_MatchesWholeBufferDetection()
+    public void WebRtcVad_ChunkedFeed_MatchesWholeBufferDetection()
     {
-        using var vad = new SileroVad();
+        var vad = new WebRtcVad();
         float[] speech = AudioDecoder.DecodeEntireFileAsync(Path.Combine(AppContext.BaseDirectory, "fixtures", "jfk_speech.wav")).GetAwaiter().GetResult();
 
         var whole = vad.DetectSpeechIntervals(speech);
 
-        // Chunk sizes that never align with the 512-sample frame.
+        // Chunk sizes that never align with the 480-sample frame.
         var stream = vad.StartProbabilityStream();
         for (int offset = 0, step = 777; offset < speech.Length; offset += step)
         {
             int count = Math.Min(step, speech.Length - offset);
             stream.Feed(speech.Skip(offset).Take(count).ToArray(), count);
         }
-        var chunked = SileroVad.ProbabilitiesToIntervals(stream.Finish(), (double)speech.Length / 16000, 0.5f);
+        var chunked = WebRtcVad.ProbabilitiesToIntervals(stream.Finish(), (double)speech.Length / 16000);
 
         Assert.NotEmpty(whole);
         Assert.Equal(whole, chunked);

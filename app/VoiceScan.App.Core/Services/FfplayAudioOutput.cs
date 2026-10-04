@@ -22,7 +22,8 @@ public sealed class FfplayAudioOutput : IAudioOutput
 
     public static IReadOnlyList<string> BuildArguments(string filePath, double startSeconds, double? durationSeconds)
     {
-        var args = new List<string> { "-nodisp", "-autoexit", "-loglevel", "quiet", "-vn" };
+        // Same protocol whitelist as the decoder: a media file can never make playback open a network or device input.
+        var args = new List<string> { "-nodisp", "-autoexit", "-loglevel", "quiet", "-vn", "-protocol_whitelist", "file,pipe" };
         args.Add("-ss");
         args.Add(startSeconds.ToString("F3", System.Globalization.CultureInfo.InvariantCulture));
         if (durationSeconds is > 0)

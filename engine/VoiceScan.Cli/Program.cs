@@ -2,6 +2,7 @@ namespace VoiceScan.Cli;
 
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
@@ -14,10 +15,18 @@ using VoiceScan.Core.Storage;
 
 public static class Program
 {
+    /// <summary>Exit code when the scan finished but at least one file could not be scanned.</summary>
+    public const int ExitSomeFilesFailed = 3;
+
+    private const int ExitUsage = 2;
+
+    /// <summary>A command-line mistake: reported as an error message and exit code 2, without a stack trace.</summary>
+    private sealed class UsageException(string message) : Exception(message);
+
     public static async Task<int> Main(string[] args)
     {
         AppPaths.UseBundledTools();
-        VoiceScanLogger.Initialize("logs/voicescan.log");
+        VoiceScanLogger.Initialize(AppPaths.LogFilePath);
 
         if (args.Length == 0 || args[0] is "-h" or "--help")
         {
@@ -39,31 +48,84 @@ public static class Program
                 "cohort" => await HandleCohortCommandAsync(cmdArgs),
                 "report" => await HandleReportCommandAsync(cmdArgs),
                 "list-tracks" or "tracks" => await HandleListTracksCommandAsync(cmdArgs),
-                _ => await HandleFallbackScanOrVerifyAsync(args)
+                "verify-model" => HandleVerifyModelCommand(cmdArgs),
+                _ when command.StartsWith("--input", StringComparison.Ordinal) => await HandleScanCommandAsync(args),
+                _ => throw new UsageException($"Unknown command '{args[0]}'.")
             };
+        }
+        catch (UsageException ex)
+        {
+            Console.Error.WriteLine($"[ERROR] {ex.Message}");
+            Console.Error.WriteLine("Run 'VoiceScan.Cli --help' for usage.");
+            return ExitUsage;
         }
         catch (Exception ex)
         {
             VoiceScanLogger.Fatal("Cli", $"Command '{command}' failed", ex);
             Console.Error.WriteLine($"[FATAL] Command '{command}' failed: {ex.Message}");
-            Console.Error.WriteLine(ex.StackTrace);
             return 1;
         }
     }
 
     private static void PrintUsage()
     {
+        string models = string.Join("|", OnnxEmbeddingModel.SupportedModelNames);
         Console.WriteLine("VoiceScan CLI — Local Offline Voice Enrollment, Media Scanner & Embedding Cache");
         Console.WriteLine("Usage:");
-        Console.WriteLine("  VoiceScan.Cli enroll --audio <files...> --name <profile_name> [--output <profile.json>] [--model <ecapa|titanet>] [--db <path>]");
-        Console.WriteLine("  VoiceScan.Cli scan --input <folder_or_file> --profile <profile.json_or_name> --output <results.json> [--export <report_dir>] [--cohort <cohort.json>] [--threshold <val>] [--smooth-radius <n>] [--model <model_id>] [--track <index>] [--db <path>] [--no-cache]");
+        Console.WriteLine($"  VoiceScan.Cli enroll --audio <files...> --name <profile_name> [--output <profile.json>] [--model <{models}>] [--multi-condition] [--db <path>]");
+        Console.WriteLine("  VoiceScan.Cli scan --input <folder_or_file> --profile <profile.json|audio|folder|db_name> --output <results.json>");
+        Console.WriteLine("                     [--export <report_dir>] [--cohort <cohort.json>] [--threshold <val>] [--cluster-threshold <val>]");
+        Console.WriteLine("                     [--no-clustering] [--no-temporal-smoothing] [--peak-delta <val>] [--smooth-radius <n>]");
+        Console.WriteLine("                     [--model <id>] [--track <index>] [--db <path>] [--no-cache] [--multi-condition] [--eval-dataset]");
+        Console.WriteLine("      --eval-dataset  evaluation datasets only: map clips to target speakers from ground_truth.json next to the");
+        Console.WriteLine("                      input and enroll profiles named on the command line from <input>/../enrollment/<name>.");
+        Console.WriteLine($"      Exit code {ExitSomeFilesFailed}: the scan finished but some files could not be scanned (listed on stderr).");
         Console.WriteLine("  VoiceScan.Cli report export --results <results.json> --output <dir> [--profile <name>]");
-        Console.WriteLine("  VoiceScan.Cli cohort build --audio <files_or_folders...> --output <cohort.json> [--model <ecapa|titanet>]");
+        Console.WriteLine("  VoiceScan.Cli cohort build --audio <files_or_folders...> --output <cohort.json> [--model <id>]");
         Console.WriteLine("  VoiceScan.Cli profiles list [--db <path>]");
         Console.WriteLine("  VoiceScan.Cli profiles delete --name <profile_name> [--db <path>]");
         Console.WriteLine("  VoiceScan.Cli cache stats [--db <path>]");
         Console.WriteLine("  VoiceScan.Cli cache clear [--model <id>] [--file <hash>] [--db <path>]");
         Console.WriteLine("  VoiceScan.Cli list-tracks --input <media_file>");
+        Console.WriteLine("  VoiceScan.Cli verify-model [--model <id>]");
+        Console.WriteLine("Numbers use '.' as the decimal separator regardless of system language.");
+    }
+
+    private static string RequireValue(string[] args, ref int i)
+    {
+        if (i + 1 >= args.Length || args[i + 1].StartsWith("--", StringComparison.Ordinal))
+        {
+            throw new UsageException($"{args[i]} needs a value.");
+        }
+        return args[++i];
+    }
+
+    private static double RequireDouble(string[] args, ref int i)
+    {
+        string option = args[i];
+        string value = RequireValue(args, ref i);
+        return double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out double result)
+            ? result
+            : throw new UsageException($"{option} expects a number such as 0.5, got '{value}'.");
+    }
+
+    private static int RequireInt(string[] args, ref int i)
+    {
+        string option = args[i];
+        string value = RequireValue(args, ref i);
+        return int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out int result)
+            ? result
+            : throw new UsageException($"{option} expects a whole number, got '{value}'.");
+    }
+
+    private static List<string> ReadValues(string[] args, ref int i)
+    {
+        var values = new List<string>();
+        while (i + 1 < args.Length && !args[i + 1].StartsWith("--", StringComparison.Ordinal))
+        {
+            values.Add(args[++i]);
+        }
+        return values;
     }
 
     private static async Task<int> HandleEnrollCommandAsync(string[] args)
@@ -79,56 +141,30 @@ public static class Program
         {
             switch (args[i])
             {
-                case "--audio":
-                    while (i + 1 < args.Length && !args[i + 1].StartsWith("--"))
-                    {
-                        audioPaths.Add(args[++i]);
-                    }
-                    break;
-                case "--name":
-                    if (i + 1 < args.Length) profileName = args[++i];
-                    break;
-                case "--output":
-                    if (i + 1 < args.Length) outputPath = args[++i];
-                    break;
-                case "--model":
-                    if (i + 1 < args.Length) modelName = args[++i];
-                    break;
-                case "--db":
-                    if (i + 1 < args.Length) dbPath = args[++i];
-                    break;
-                case "--multi-condition":
-                    multiCondition = true;
-                    break;
+                case "--audio": audioPaths.AddRange(ReadValues(args, ref i)); break;
+                case "--name": profileName = RequireValue(args, ref i); break;
+                case "--output": outputPath = RequireValue(args, ref i); break;
+                case "--model": modelName = RequireValue(args, ref i); break;
+                case "--db": dbPath = RequireValue(args, ref i); break;
+                case "--multi-condition": multiCondition = true; break;
+                default: throw new UsageException($"Unknown option for enroll: {args[i]}");
             }
         }
 
-        if (string.IsNullOrWhiteSpace(profileName))
-        {
-            Console.Error.WriteLine("[ERROR] --name <profile_name> is required for enrollment.");
-            return 2;
-        }
-
-        if (audioPaths.Count == 0)
-        {
-            Console.Error.WriteLine("[ERROR] --audio <paths...> requires at least one audio file.");
-            return 2;
-        }
+        if (string.IsNullOrWhiteSpace(profileName)) throw new UsageException("--name <profile_name> is required for enrollment.");
+        if (audioPaths.Count == 0) throw new UsageException("--audio <paths...> requires at least one audio file.");
 
         outputPath ??= $"{profileName}.profile.json";
 
         Console.WriteLine($"[INFO] Enrolling profile '{profileName}' using model '{modelName}' (multi-condition={multiCondition}) from {audioPaths.Count} clip(s)...");
 
         using var embeddingModel = new OnnxEmbeddingModel(modelName);
-        using var vad = new SileroVad();
-
-        var enrollmentService = new ProfileEnrollmentService(embeddingModel, vad);
+        var enrollmentService = new ProfileEnrollmentService(embeddingModel, new WebRtcVad());
         var profile = await enrollmentService.EnrollProfileAsync(audioPaths, profileName, multiCondition: multiCondition);
 
         profile.SaveToFile(outputPath);
         Console.WriteLine($"[SUCCESS] Voice profile successfully enrolled and saved to: {Path.GetFullPath(outputPath)}");
 
-        // Save to SQLite database if available
         try
         {
             using var db = new VoiceScanDatabase(dbPath);
@@ -136,12 +172,12 @@ public static class Program
             await db.SaveProfileAsync(profile);
             Console.WriteLine($"[INFO] Profile '{profileName}' persisted to database.");
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or Microsoft.Data.Sqlite.SqliteException)
         {
-            Console.WriteLine($"[WARNING] Could not persist profile to database: {ex.Message}");
+            Console.Error.WriteLine($"[WARNING] Could not persist profile to database: {ex.Message}");
         }
 
-        Console.WriteLine($"  - Model: {profile.ModelId}");
+        Console.WriteLine($"  - Model: {profile.ModelVersion}");
         Console.WriteLine($"  - Total Speech: {profile.TotalSpeechDurationSeconds:F2}s across {profile.EnrollmentEmbeddings.Count} window(s)");
         Console.WriteLine($"  - Centroid Dimension: {profile.Centroid.Length}");
 
@@ -153,166 +189,81 @@ public static class Program
         string? inputPath = null;
         string? profileArg = null;
         string? outputPath = null;
+        string? exportDir = null;
         double? thresholdArg = null;
+        double? clusterThresholdArg = null;
         string modelName = "ecapa";
         int trackIndex = 0;
         string? dbPath = null;
         bool noCache = false;
-        double clusterThreshold = 0.40;
         bool enableClustering = true;
         bool enableTemporalSmoothing = true;
         double peakDelta = 0.04;
         int scoreSmoothingRadius = PipelineScanner.DefaultScoreSmoothingRadius;
         string? cohortPath = null;
         bool multiCondition = false;
+        bool evalDataset = false;
 
         for (int i = 0; i < args.Length; i++)
         {
             switch (args[i])
             {
-                case "--input":
-                    if (i + 1 < args.Length) inputPath = args[++i];
-                    break;
-                case "--profile":
-                    if (i + 1 < args.Length) profileArg = args[++i];
-                    break;
-                case "--output":
-                    if (i + 1 < args.Length) outputPath = args[++i];
-                    break;
-                case "--threshold":
-                    if (i + 1 < args.Length && double.TryParse(args[++i], out var t)) thresholdArg = t;
-                    break;
-                case "--cluster-threshold":
-                    if (i + 1 < args.Length && double.TryParse(args[++i], out var ct)) clusterThreshold = ct;
-                    break;
-                case "--smooth-radius":
-                    if (i + 1 < args.Length && int.TryParse(args[++i], out var sr)) scoreSmoothingRadius = sr;
-                    break;
-                case "--no-clustering":
-                    enableClustering = false;
-                    break;
-                case "--no-temporal-smoothing":
-                    enableTemporalSmoothing = false;
-                    break;
-                case "--peak-delta":
-                    if (i + 1 < args.Length && double.TryParse(args[++i], out var pd)) peakDelta = pd;
-                    break;
-                case "--cohort":
-                    if (i + 1 < args.Length) cohortPath = args[++i];
-                    break;
-                case "--multi-condition":
-                    multiCondition = true;
-                    break;
-                case "--model":
-                    if (i + 1 < args.Length) modelName = args[++i];
-                    break;
-                case "--track":
-                    if (i + 1 < args.Length && int.TryParse(args[++i], out var trk)) trackIndex = trk;
-                    break;
-                case "--db":
-                    if (i + 1 < args.Length) dbPath = args[++i];
-                    break;
-                case "--no-cache":
-                    noCache = true;
-                    break;
+                case "--input": inputPath = RequireValue(args, ref i); break;
+                case "--profile": profileArg = RequireValue(args, ref i); break;
+                case "--output": outputPath = RequireValue(args, ref i); break;
+                case "--export": exportDir = RequireValue(args, ref i); break;
+                case "--threshold": thresholdArg = RequireDouble(args, ref i); break;
+                case "--cluster-threshold": clusterThresholdArg = RequireDouble(args, ref i); break;
+                case "--smooth-radius": scoreSmoothingRadius = RequireInt(args, ref i); break;
+                case "--no-clustering": enableClustering = false; break;
+                case "--no-temporal-smoothing": enableTemporalSmoothing = false; break;
+                case "--peak-delta": peakDelta = RequireDouble(args, ref i); break;
+                case "--cohort": cohortPath = RequireValue(args, ref i); break;
+                case "--multi-condition": multiCondition = true; break;
+                case "--model": modelName = RequireValue(args, ref i); break;
+                case "--track": trackIndex = RequireInt(args, ref i); break;
+                case "--db": dbPath = RequireValue(args, ref i); break;
+                case "--no-cache": noCache = true; break;
+                case "--eval-dataset": evalDataset = true; break;
+                default: throw new UsageException($"Unknown option for scan: {args[i]}");
             }
         }
 
-        if (string.IsNullOrWhiteSpace(inputPath))
-        {
-            Console.Error.WriteLine("[ERROR] --input <folder_or_file> is required.");
-            return 2;
-        }
-
-        if (string.IsNullOrWhiteSpace(profileArg))
-        {
-            Console.Error.WriteLine("[ERROR] --profile <profile> is required.");
-            return 2;
-        }
-
-        if (string.IsNullOrWhiteSpace(outputPath))
-        {
-            Console.Error.WriteLine("[ERROR] --output <results.json> is required.");
-            return 2;
-        }
+        if (string.IsNullOrWhiteSpace(inputPath)) throw new UsageException("--input <folder_or_file> is required.");
+        if (string.IsNullOrWhiteSpace(profileArg)) throw new UsageException("--profile <profile> is required.");
+        if (string.IsNullOrWhiteSpace(outputPath)) throw new UsageException("--output <results.json> is required.");
+        if (trackIndex < 0) throw new UsageException("--track must be 0 or greater.");
+        if (cohortPath != null && !File.Exists(cohortPath)) throw new UsageException($"Cohort file not found: {cohortPath}");
 
         using var embeddingModel = new OnnxEmbeddingModel(modelName);
-        using var vad = new SileroVad();
+        var vad = new WebRtcVad();
 
-        VoiceScanDatabase? database = null;
-        if (!noCache)
+        using var database = noCache ? null : new VoiceScanDatabase(dbPath);
+        if (database != null)
         {
-            database = new VoiceScanDatabase(dbPath);
             await database.InitializeAsync();
         }
 
-        VoiceProfile profile = await ResolveOrEnrollProfileAsync(profileArg, inputPath, embeddingModel, vad, database, multiCondition);
+        VoiceProfile profile = await ResolveOrEnrollProfileAsync(profileArg, inputPath, embeddingModel, vad, database, multiCondition, evalDataset);
 
-        // Check if dataset has multi-speaker ground truth map (e.g. dev/test benchmark datasets)
+        // Evaluation datasets name a target speaker per clip; only honoured when asked for, so a stray
+        // ground_truth.json near real recordings can never change which voice is searched for.
         var clipProfileMap = new Dictionary<string, VoiceProfile>(StringComparer.OrdinalIgnoreCase);
-        string? datasetDir = Directory.Exists(inputPath) ? inputPath : Path.GetDirectoryName(inputPath);
-        if (!string.IsNullOrEmpty(datasetDir))
+        if (evalDataset)
         {
-            var gtCandidates = new[]
-            {
-                Path.Combine(datasetDir, "ground_truth.json"),
-                Path.Combine(datasetDir, "..", "ground_truth.json")
-            };
-
-            foreach (var gtFile in gtCandidates)
-            {
-                if (File.Exists(gtFile))
-                {
-                    try
-                    {
-                        var enrolledCache = new Dictionary<string, VoiceProfile>(StringComparer.OrdinalIgnoreCase)
-                        {
-                            [profile.ProfileName] = profile
-                        };
-
-                        using var gtDoc = JsonDocument.Parse(File.ReadAllText(gtFile));
-                        foreach (var el in gtDoc.RootElement.EnumerateArray())
-                        {
-                            if (el.TryGetProperty("clip_id", out var cId) && el.TryGetProperty("target_speaker_id", out var spkId))
-                            {
-                                string cName = cId.GetString() ?? "";
-                                string targetSpk = spkId.GetString() ?? "";
-                                if (!string.IsNullOrEmpty(cName) && !string.IsNullOrEmpty(targetSpk))
-                                {
-                                    if (!enrolledCache.TryGetValue(targetSpk, out var spkProf))
-                                    {
-                                        spkProf = await ResolveOrEnrollProfileAsync(targetSpk, inputPath, embeddingModel, vad, database, multiCondition);
-                                        enrolledCache[targetSpk] = spkProf;
-                                    }
-                                    clipProfileMap[cName] = spkProf;
-                                }
-                            }
-                        }
-                        Console.WriteLine($"[INFO] Loaded target speaker mappings for {clipProfileMap.Count} clip(s) from {gtFile}");
-                        break;
-                    }
-                    catch (Exception ex)
-                    {
-                        Console.WriteLine($"[WARNING] Could not parse ground truth mappings: {ex.Message}");
-                    }
-                }
-            }
+            await LoadEvalDatasetProfilesAsync(clipProfileMap, profile, inputPath, embeddingModel, vad, database, multiCondition);
         }
 
-        double threshold = thresholdArg ?? (profile.ModelId.Contains("camp", StringComparison.OrdinalIgnoreCase) ? 0.38 : 0.48);
-
-        ScoreNormalizer? normalizer = null;
-        if (!string.IsNullOrEmpty(cohortPath) && File.Exists(cohortPath))
-        {
-            normalizer = ScoreNormalizer.FromFile(cohortPath);
-        }
+        double threshold = thresholdArg ?? embeddingModel.OperatingPoint.Threshold;
+        double clusterThreshold = clusterThresholdArg ?? embeddingModel.OperatingPoint.ClusterDistanceThreshold;
+        ScoreNormalizer? normalizer = cohortPath != null ? ScoreNormalizer.FromFile(cohortPath, embeddingModel) : null;
 
         Console.WriteLine($"[INFO] Pipelined Scan starting:");
-        Console.WriteLine($"  - Target Profile: {profile.ProfileName} ({profile.ModelId})");
+        Console.WriteLine($"  - Target Profile: {profile.ProfileName} ({profile.ModelVersion})");
         Console.WriteLine($"  - Input: {inputPath}");
-        Console.WriteLine($"  - Threshold: {threshold:F4}");
-        Console.WriteLine($"  - Clustering: {(enableClustering ? $"AHC (threshold={clusterThreshold:F2})" : "Disabled")}");
-        Console.WriteLine($"  - Temporal Smoothing: {(enableTemporalSmoothing ? $"Active (peakDelta={peakDelta:F3})" : "Disabled")}");
+        Console.WriteLine(string.Create(CultureInfo.InvariantCulture, $"  - Threshold: {threshold:F4}"));
+        Console.WriteLine(string.Create(CultureInfo.InvariantCulture, $"  - Clustering: {(enableClustering ? $"AHC (threshold={clusterThreshold:F2})" : "Disabled")}"));
+        Console.WriteLine(string.Create(CultureInfo.InvariantCulture, $"  - Temporal Smoothing: {(enableTemporalSmoothing ? $"Active (peakDelta={peakDelta:F3})" : "Disabled")}"));
         Console.WriteLine($"  - Impostor Cohort (AS-Norm): {(normalizer != null ? $"Active ({normalizer.CohortSize} embeddings from {cohortPath})" : "None")}");
         Console.WriteLine($"  - Cache Active: {!noCache}");
         Console.WriteLine($"  - Output: {outputPath}");
@@ -339,120 +290,119 @@ public static class Program
         }
 
         File.WriteAllText(outputPath, json);
-        Console.WriteLine($"[SUCCESS] Scan complete. Processed {document.Files.Count} file(s) in {document.ScanMetadata.ElapsedSeconds:F2}s. Results written to: {outputPath}");
+        Console.WriteLine(string.Create(CultureInfo.InvariantCulture,
+            $"[SUCCESS] Scan complete. Processed {document.Files.Count} file(s) in {document.ScanMetadata.ElapsedSeconds:F2}s. Results written to: {outputPath}"));
 
-        string? exportDir = GetOptionValue(args, "--export");
-        if (!string.IsNullOrEmpty(exportDir))
+        var failed = document.Files.Where(f => f.Error is not null).ToList();
+        foreach (var f in failed)
         {
-            var exporter = new EvidenceReportExporter();
-            var exportSettings = new ReportExportSettings(
-                ProfileName: document.ScanMetadata.ProfileName,
-                ModelId: document.ScanMetadata.ModelId,
-                EngineVersion: document.ScanMetadata.EngineVersion,
-                Threshold: document.ScanMetadata.Threshold,
-                ClusterThreshold: clusterThreshold,
-                TemporalSmoothing: enableTemporalSmoothing,
-                ScanDateUtc: DateTimeOffset.UtcNow);
-
-            var fileResults = document.Files.Select(f => new FileVerdictResult(
-                FilePath: f.FilePath,
-                FileName: Path.GetFileName(f.FilePath),
-                FileHash: !string.IsNullOrEmpty(f.FileHash) ? f.FileHash : f.ClipId,
-                DurationSeconds: f.DurationSeconds,
-                OverallVerdict: f.Verdict,
-                MaxConfidence: f.MaxConfidence,
-                Segments: f.Segments.Select(s => new HitSegmentResult(
-                    SegmentId: $"{Path.GetFileNameWithoutExtension(f.FilePath)}_{s.StartTimeSeconds:F1}",
-                    FilePath: f.FilePath,
-                    StartTimeSeconds: s.StartTimeSeconds,
-                    EndTimeSeconds: s.EndTimeSeconds,
-                    DurationSeconds: s.EndTimeSeconds - s.StartTimeSeconds,
-                    Verdict: s.Verdict,
-                    Confidence: s.Confidence,
-                    ReasonFlags: s.ReasonFlags,
-                    SegmentEmbedding: s.Embedding,
-                    FileHash: f.FileHash)).ToList())).ToList();
-
-            var exportResult = await exporter.ExportReportAsync(fileResults, exportSettings, exportDir);
-            Console.WriteLine($"[EXPORT] Evidence report generated in: {exportDir}");
-            Console.WriteLine($"  - CSV: {exportResult.CsvPath}");
-            Console.WriteLine($"  - PDF: {exportResult.PdfPath}");
-            Console.WriteLine($"  - Audio Hits Extracted: {exportResult.ExtractedAudioClipPaths.Count} clip(s)");
+            Console.Error.WriteLine($"[ERROR] Could not scan {f.FilePath}: {f.Error}");
         }
 
-        database?.Dispose();
-        return 0;
+        if (!string.IsNullOrEmpty(exportDir))
+        {
+            await ExportReportAsync(document, profile.ProfileName, exportDir);
+        }
+
+        return failed.Count > 0 ? ExitSomeFilesFailed : 0;
     }
 
     private static async Task<VoiceProfile> ResolveOrEnrollProfileAsync(
         string profileArg,
         string inputPath,
         ISpeakerEmbeddingModel embeddingModel,
-        SileroVad vad,
-        VoiceScanDatabase? database = null,
-        bool multiCondition = false)
+        WebRtcVad vad,
+        VoiceScanDatabase? database,
+        bool multiCondition,
+        bool evalDataset)
     {
-        // 1. Check database if active
-        if (database != null)
+        var enrollmentService = new ProfileEnrollmentService(embeddingModel, vad);
+
+        async Task<VoiceProfile> EnrollAsync(IReadOnlyList<string> clips, string name)
         {
-            var stored = await database.GetProfileAsync(profileArg);
-            if (stored != null)
-            {
-                return stored;
-            }
+            var prof = await enrollmentService.EnrollProfileAsync(clips, name, multiCondition: multiCondition);
+            if (database != null) await database.SaveProfileAsync(prof);
+            return prof;
         }
 
-        // 2. If it is an existing JSON file
+        // An existing path always means that path; a database name is only used when no such file or folder exists.
         if (File.Exists(profileArg) && profileArg.EndsWith(".json", StringComparison.OrdinalIgnoreCase))
         {
             return VoiceProfile.LoadFromFile(profileArg);
         }
 
-        // 3. If it is an audio file or folder of audio
         if (File.Exists(profileArg))
         {
-            var enrollmentService = new ProfileEnrollmentService(embeddingModel, vad);
-            var prof = await enrollmentService.EnrollProfileAsync(new[] { profileArg }, Path.GetFileNameWithoutExtension(profileArg), multiCondition: multiCondition);
-            if (database != null) await database.SaveProfileAsync(prof);
-            return prof;
+            return await EnrollAsync([profileArg], Path.GetFileNameWithoutExtension(profileArg));
         }
 
         if (Directory.Exists(profileArg))
         {
-            var clips = Directory.GetFiles(profileArg, "*.wav");
-            var enrollmentService = new ProfileEnrollmentService(embeddingModel, vad);
-            var prof = await enrollmentService.EnrollProfileAsync(clips, Path.GetFileName(profileArg), multiCondition: multiCondition);
-            if (database != null) await database.SaveProfileAsync(prof);
-            return prof;
+            var clips = MediaFileCollector.Collect([profileArg]);
+            if (clips.Count == 0) throw new UsageException($"No supported audio files in profile folder: {profileArg}");
+            return await EnrollAsync(clips, Path.GetFileName(Path.TrimEndingDirectorySeparator(profileArg)));
         }
 
-        // 4. Check for standard dataset enrollment folders: <inputPath>/../enrollment/<profileArg>
-        string? inputDir = Directory.Exists(inputPath) ? inputPath : Path.GetDirectoryName(inputPath);
-        if (!string.IsNullOrEmpty(inputDir))
+        if (database != null && await database.GetProfileAsync(profileArg) is { } stored)
         {
-            var candidates = new[]
-            {
-                Path.Combine(inputDir, "enrollment", profileArg),
-                Path.Combine(inputDir, "..", "enrollment", profileArg)
-            };
+            return stored;
+        }
 
-            foreach (var cand in candidates)
+        if (evalDataset)
+        {
+            string? inputDir = Directory.Exists(inputPath) ? inputPath : Path.GetDirectoryName(inputPath);
+            if (!string.IsNullOrEmpty(inputDir))
             {
-                if (Directory.Exists(cand))
+                foreach (var cand in new[] { Path.Combine(inputDir, "enrollment", profileArg), Path.Combine(inputDir, "..", "enrollment", profileArg) })
                 {
-                    var clips = Directory.GetFiles(cand, "*.wav");
-                    if (clips.Length > 0)
+                    var clips = Directory.Exists(cand) ? MediaFileCollector.Collect([cand]) : [];
+                    if (clips.Count > 0)
                     {
-                        var enrollmentService = new ProfileEnrollmentService(embeddingModel, vad);
-                        var prof = await enrollmentService.EnrollProfileAsync(clips, profileArg, multiCondition: multiCondition);
-                        if (database != null) await database.SaveProfileAsync(prof);
-                        return prof;
+                        return await EnrollAsync(clips, profileArg);
                     }
                 }
             }
         }
 
-        throw new FileNotFoundException($"Could not locate or resolve voice profile from: {profileArg}");
+        throw new UsageException($"Could not find a voice profile file, audio, folder or stored profile named: {profileArg}");
+    }
+
+    private static async Task LoadEvalDatasetProfilesAsync(
+        Dictionary<string, VoiceProfile> clipProfileMap,
+        VoiceProfile defaultProfile,
+        string inputPath,
+        ISpeakerEmbeddingModel embeddingModel,
+        WebRtcVad vad,
+        VoiceScanDatabase? database,
+        bool multiCondition)
+    {
+        string? datasetDir = Directory.Exists(inputPath) ? inputPath : Path.GetDirectoryName(inputPath);
+        if (string.IsNullOrEmpty(datasetDir)) return;
+
+        var gtFile = new[] { Path.Combine(datasetDir, "ground_truth.json"), Path.Combine(datasetDir, "..", "ground_truth.json") }
+            .FirstOrDefault(File.Exists)
+            ?? throw new UsageException($"--eval-dataset was given but no ground_truth.json exists in or above {datasetDir}.");
+
+        var enrolled = new Dictionary<string, VoiceProfile>(StringComparer.OrdinalIgnoreCase)
+        {
+            [defaultProfile.ProfileName] = defaultProfile
+        };
+
+        using var gtDoc = JsonDocument.Parse(File.ReadAllText(gtFile));
+        foreach (var el in gtDoc.RootElement.EnumerateArray())
+        {
+            if (el.TryGetProperty("clip_id", out var cId) && el.TryGetProperty("target_speaker_id", out var spkId)
+                && cId.GetString() is { Length: > 0 } clipName && spkId.GetString() is { Length: > 0 } targetSpk)
+            {
+                if (!enrolled.TryGetValue(targetSpk, out var spkProf))
+                {
+                    spkProf = await ResolveOrEnrollProfileAsync(targetSpk, inputPath, embeddingModel, vad, database, multiCondition, evalDataset: true);
+                    enrolled[targetSpk] = spkProf;
+                }
+                clipProfileMap[clipName] = spkProf;
+            }
+        }
+        Console.WriteLine($"[INFO] Loaded target speaker mappings for {clipProfileMap.Count} clip(s) from {gtFile}");
     }
 
     private static async Task<int> HandleProfilesCommandAsync(string[] args)
@@ -471,8 +421,12 @@ public static class Program
 
         for (int i = 1; i < args.Length; i++)
         {
-            if (args[i] == "--db" && i + 1 < args.Length) dbPath = args[++i];
-            if (args[i] == "--name" && i + 1 < args.Length) name = args[++i];
+            switch (args[i])
+            {
+                case "--db": dbPath = RequireValue(args, ref i); break;
+                case "--name": name = RequireValue(args, ref i); break;
+                default: throw new UsageException($"Unknown option for profiles: {args[i]}");
+            }
         }
 
         using var db = new VoiceScanDatabase(dbPath);
@@ -486,38 +440,26 @@ public static class Program
             {
                 Console.WriteLine("  (No profiles currently stored)");
             }
-            else
+            foreach (var p in profiles)
             {
-                foreach (var p in profiles)
-                {
-                    Console.WriteLine($"  - '{p.Name}': Model={p.ModelVersion}, Created={p.CreatedAt}, Clips={p.ClipCount}, Speech={p.TotalSpeechDurationSeconds:F2}s");
-                }
+                Console.WriteLine(string.Create(CultureInfo.InvariantCulture,
+                    $"  - '{p.Name}': Model={p.ModelVersion}, Created={p.CreatedAt}, Clips={p.ClipCount}, Speech={p.TotalSpeechDurationSeconds:F2}s"));
             }
             return 0;
         }
 
         if (sub == "delete")
         {
-            if (string.IsNullOrWhiteSpace(name))
-            {
-                Console.Error.WriteLine("[ERROR] --name <profile_name> is required to delete.");
-                return 2;
-            }
+            if (string.IsNullOrWhiteSpace(name)) throw new UsageException("--name <profile_name> is required to delete.");
 
             bool deleted = await db.DeleteProfileAsync(name);
-            if (deleted)
-            {
-                Console.WriteLine($"[SUCCESS] Profile '{name}' deleted from database.");
-            }
-            else
-            {
-                Console.WriteLine($"[INFO] Profile '{name}' was not found in database.");
-            }
+            Console.WriteLine(deleted
+                ? $"[SUCCESS] Profile '{name}' deleted from database."
+                : $"[INFO] Profile '{name}' was not found in database.");
             return 0;
         }
 
-        Console.Error.WriteLine($"[ERROR] Unknown profiles subcommand: {sub}");
-        return 1;
+        throw new UsageException($"Unknown profiles subcommand: {sub}");
     }
 
     private static async Task<int> HandleCacheCommandAsync(string[] args)
@@ -537,9 +479,13 @@ public static class Program
 
         for (int i = 1; i < args.Length; i++)
         {
-            if (args[i] == "--db" && i + 1 < args.Length) dbPath = args[++i];
-            if (args[i] == "--model" && i + 1 < args.Length) model = args[++i];
-            if (args[i] == "--file" && i + 1 < args.Length) fileHash = args[++i];
+            switch (args[i])
+            {
+                case "--db": dbPath = RequireValue(args, ref i); break;
+                case "--model": model = RequireValue(args, ref i); break;
+                case "--file": fileHash = RequireValue(args, ref i); break;
+                default: throw new UsageException($"Unknown option for cache: {args[i]}");
+            }
         }
 
         using var db = new VoiceScanDatabase(dbPath);
@@ -553,7 +499,7 @@ public static class Program
             Console.WriteLine($"  Cached Windows:     {stats.TotalCachedWindows}");
             Console.WriteLine($"  Enrolled Profiles:  {stats.TotalProfiles}");
             Console.WriteLine($"  Stored Scan Runs:   {stats.TotalScanResults}");
-            Console.WriteLine($"  Database File Size: {(stats.DatabaseSizeBytes / 1024.0 / 1024.0):F2} MB");
+            Console.WriteLine(string.Create(CultureInfo.InvariantCulture, $"  Database File Size: {stats.DatabaseSizeBytes / 1024.0 / 1024.0:F2} MB"));
             return 0;
         }
 
@@ -564,8 +510,7 @@ public static class Program
             return 0;
         }
 
-        Console.Error.WriteLine($"[ERROR] Unknown cache subcommand: {sub}");
-        return 1;
+        throw new UsageException($"Unknown cache subcommand: {sub}");
     }
 
     private static async Task<int> HandleListTracksCommandAsync(string[] args)
@@ -573,16 +518,16 @@ public static class Program
         string? inputPath = null;
         for (int i = 0; i < args.Length; i++)
         {
-            if (args[i] == "--input" && i + 1 < args.Length)
+            switch (args[i])
             {
-                inputPath = args[++i];
+                case "--input": inputPath = RequireValue(args, ref i); break;
+                default: throw new UsageException($"Unknown option for list-tracks: {args[i]}");
             }
         }
 
         if (string.IsNullOrWhiteSpace(inputPath) || !File.Exists(inputPath))
         {
-            Console.Error.WriteLine("[ERROR] --input <valid_media_file> is required.");
-            return 2;
+            throw new UsageException("--input <valid_media_file> is required.");
         }
 
         var tracks = await AudioDecoder.ProbeAudioTracksAsync(inputPath);
@@ -599,109 +544,54 @@ public static class Program
         if (args.Length == 0 || args[0] is "-h" or "--help")
         {
             Console.WriteLine("Cohort Management:");
-            Console.WriteLine("  VoiceScan.Cli cohort build --audio <paths...> --output <cohort.json> [--model <ecapa|titanet>]");
+            Console.WriteLine("  VoiceScan.Cli cohort build --audio <paths...> --output <cohort.json> [--model <id>]");
             return 0;
         }
 
         string sub = args[0].ToLowerInvariant();
         if (sub != "build" && sub != "create")
         {
-            Console.Error.WriteLine($"[ERROR] Unknown cohort subcommand: {sub}");
-            return 1;
+            throw new UsageException($"Unknown cohort subcommand: {sub}");
         }
 
         var audioPaths = new List<string>();
-        string? outputPath = null;
+        string outputPath = "impostor_cohort.json";
         string modelName = "ecapa";
 
         for (int i = 1; i < args.Length; i++)
         {
             switch (args[i])
             {
-                case "--audio":
-                    while (i + 1 < args.Length && !args[i + 1].StartsWith("--"))
-                    {
-                        audioPaths.Add(args[++i]);
-                    }
-                    break;
-                case "--output":
-                    if (i + 1 < args.Length) outputPath = args[++i];
-                    break;
-                case "--model":
-                    if (i + 1 < args.Length) modelName = args[++i];
-                    break;
+                case "--audio": audioPaths.AddRange(ReadValues(args, ref i)); break;
+                case "--output": outputPath = RequireValue(args, ref i); break;
+                case "--model": modelName = RequireValue(args, ref i); break;
+                default: throw new UsageException($"Unknown option for cohort build: {args[i]}");
             }
         }
 
-        if (audioPaths.Count == 0)
-        {
-            Console.Error.WriteLine("[ERROR] --audio <paths...> requires at least one audio file or directory.");
-            return 2;
-        }
+        if (audioPaths.Count == 0) throw new UsageException("--audio <paths...> requires at least one audio file or directory.");
 
-        outputPath ??= "impostor_cohort.json";
-
-        var allFiles = new List<string>();
-        foreach (var p in audioPaths)
-        {
-            if (File.Exists(p))
-            {
-                allFiles.Add(p);
-            }
-            else if (Directory.Exists(p))
-            {
-                string[] ext = { "*.wav", "*.flac", "*.mp3", "*.ogg" };
-                foreach (var e in ext)
-                {
-                    allFiles.AddRange(Directory.GetFiles(p, e, SearchOption.AllDirectories));
-                }
-            }
-        }
-
-        if (allFiles.Count == 0)
-        {
-            Console.Error.WriteLine("[ERROR] No audio files found from specified paths.");
-            return 2;
-        }
+        var allFiles = MediaFileCollector.Collect(audioPaths);
+        if (allFiles.Count == 0) throw new UsageException("No audio files found from specified paths.");
 
         Console.WriteLine($"[INFO] Building impostor cohort from {allFiles.Count} clip(s) using model '{modelName}'...");
 
         using var embeddingModel = new OnnxEmbeddingModel(modelName);
-        using var vad = new SileroVad();
+        var enrollmentService = new ProfileEnrollmentService(embeddingModel, new WebRtcVad());
+        var cohortDoc = new CohortDocument { ModelId = embeddingModel.ModelVersion };
 
-        var cohortDoc = new CohortDocument
-        {
-            ModelId = embeddingModel.ModelId
-        };
-
+        // Each file is decoded up to the enrollment cap and embedded in batches, so long files stay bounded in memory.
         foreach (var file in allFiles)
         {
-            var pcmChunks = new List<float[]>();
-            long totalSamples = 0;
-
-            await foreach (var chunk in AudioDecoder.StreamDecodeAsync(file, sampleRate: 16000))
+            try
             {
-                pcmChunks.Add(chunk.Samples);
-                totalSamples += chunk.Samples.Length;
+                var perFile = await enrollmentService.EnrollProfileAsync([file], "cohort");
+                cohortDoc.Embeddings.AddRange(perFile.EnrollmentEmbeddings);
             }
-
-            if (totalSamples == 0) continue;
-
-            float[] fullPcm = new float[totalSamples];
-            int offset = 0;
-            foreach (var c in pcmChunks)
+            catch (InvalidDataException ex)
             {
-                Array.Copy(c, 0, fullPcm, offset, c.Length);
-                offset += c.Length;
+                Console.Error.WriteLine($"[WARNING] Skipping {file}: {ex.Message}");
             }
-
-            var intervals = vad.DetectSpeechIntervals(fullPcm);
-            var windows = SpeechWindowExtractor.ExtractWindows(fullPcm, intervals, sampleRate: 16000);
-            if (windows.Count == 0) continue;
-
-            var samples = windows.Select(w => w.AudioSamples).ToList();
-            var embeddings = embeddingModel.ExtractEmbeddingsBatch(samples);
-            cohortDoc.Embeddings.AddRange(embeddings);
         }
 
         cohortDoc.SaveToFile(outputPath);
@@ -709,66 +599,97 @@ public static class Program
         return 0;
     }
 
-    private static async Task<int> HandleFallbackScanOrVerifyAsync(string[] args)
+    private static int HandleVerifyModelCommand(string[] args)
     {
-        if (args.Length > 0 && args[0].StartsWith("--input"))
+        string modelName = "ecapa";
+        for (int i = 0; i < args.Length; i++)
         {
-            return await HandleScanCommandAsync(args);
+            switch (args[i])
+            {
+                case "--model": modelName = RequireValue(args, ref i); break;
+                default: throw new UsageException($"Unknown option for verify-model: {args[i]}");
+            }
         }
 
-        try
-        {
-            var result = GpuModelSample.LoadAndRunSample(args.Length > 0 ? args[0] : null);
-            Console.WriteLine($"[SUCCESS] Model '{result.ModelName}' verified with provider: {result.ActiveProvider}");
-            return 0;
-        }
-        catch (Exception ex)
-        {
-            Console.Error.WriteLine($"[ERROR] Unknown command or failed verification: {ex.Message}");
-            PrintUsage();
-            return 1;
-        }
+        using var model = new OnnxEmbeddingModel(modelName);
+        var embedding = model.ExtractEmbedding(new float[2 * AudioDecoder.DefaultSampleRate]);
+        Console.WriteLine($"[SUCCESS] {model.ModelVersion} loaded on {model.ActiveProvider}; checksum verified; {embedding.Length}-dim embedding produced.");
+        return 0;
     }
 
     private static async Task<int> HandleReportCommandAsync(string[] args)
     {
-        string? resultsPath = GetOptionValue(args, "--results");
-        string? outputDir = GetOptionValue(args, "--output") ?? "reports/evidence";
-        string? profileName = GetOptionValue(args, "--profile") ?? "EnrolledProfile";
+        if (args.Length == 0 || !args[0].Equals("export", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new UsageException("Usage: VoiceScan.Cli report export --results <results.json> --output <dir> [--profile <name>]");
+        }
+
+        string? resultsPath = null;
+        string outputDir = "reports/evidence";
+        string? profileName = null;
+        for (int i = 1; i < args.Length; i++)
+        {
+            switch (args[i])
+            {
+                case "--results": resultsPath = RequireValue(args, ref i); break;
+                case "--output": outputDir = RequireValue(args, ref i); break;
+                case "--profile": profileName = RequireValue(args, ref i); break;
+                default: throw new UsageException($"Unknown option for report export: {args[i]}");
+            }
+        }
 
         if (string.IsNullOrEmpty(resultsPath) || !File.Exists(resultsPath))
         {
-            Console.WriteLine("Usage: VoiceScan.Cli report export --results <results.json> --output <dir> [--profile <name>]");
-            return 1;
+            throw new UsageException("--results <results.json> must name an existing scan results file.");
         }
 
-        string json = await File.ReadAllTextAsync(resultsPath);
-        var doc = JsonSerializer.Deserialize<ScanOutputDocument>(json);
-        if (doc == null)
+        var doc = JsonSerializer.Deserialize<ScanOutputDocument>(await File.ReadAllTextAsync(resultsPath))
+            ?? throw new UsageException($"Could not parse results JSON from: {resultsPath}");
+
+        await ExportReportAsync(doc, profileName, outputDir);
+        return 0;
+    }
+
+    /// <summary>Writes the evidence report with the settings recorded in the scan results, never assumed defaults.</summary>
+    private static async Task ExportReportAsync(ScanOutputDocument document, string? profileOverride, string outputDir)
+    {
+        var meta = document.ScanMetadata;
+        if (meta.ClusteringEnabled is not { } clustering || meta.ClusterThreshold is not { } clusterThreshold
+            || meta.TemporalSmoothing is not { } smoothing)
         {
-            Console.Error.WriteLine("[ERROR] Could not parse results JSON from: " + resultsPath);
-            return 1;
+            throw new UsageException(
+                "This results file does not record the clustering and smoothing settings it was scanned with " +
+                "(it was written by an older VoiceScan). Re-run the scan to produce an evidence report.");
         }
 
-        var exporter = new EvidenceReportExporter();
-        var exportSettings = new ReportExportSettings(
-            ProfileName: doc.ScanMetadata.ProfileName ?? profileName,
-            ModelId: doc.ScanMetadata.ModelId ?? "speechbrain-ecapa-tdnn",
-            EngineVersion: doc.ScanMetadata.EngineVersion ?? "0.1.0",
-            Threshold: doc.ScanMetadata.Threshold,
-            ClusterThreshold: 0.40,
-            TemporalSmoothing: true,
-            ScanDateUtc: DateTimeOffset.UtcNow);
+        string profileName = !string.IsNullOrWhiteSpace(profileOverride) ? profileOverride
+            : !string.IsNullOrWhiteSpace(meta.ProfileName) ? meta.ProfileName
+            : "Unknown profile";
+        var scanDate = DateTimeOffset.TryParse(meta.Timestamp, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var parsed)
+            ? parsed
+            : DateTimeOffset.UtcNow;
 
-        var fileResults = doc.Files.Select(f => new FileVerdictResult(
+        var exportSettings = new ReportExportSettings(
+            ProfileName: profileName,
+            ModelId: string.IsNullOrEmpty(meta.ModelVersion) ? meta.ModelId : meta.ModelVersion,
+            EngineVersion: meta.EngineVersion,
+            Threshold: meta.Threshold,
+            ClusterThreshold: clusterThreshold,
+            TemporalSmoothing: smoothing,
+            ScanDateUtc: scanDate,
+            ClusteringEnabled: clustering);
+
+        var fileResults = document.Files.Select(f => new FileVerdictResult(
             FilePath: f.FilePath,
             FileName: Path.GetFileName(f.FilePath),
-            FileHash: !string.IsNullOrEmpty(f.FileHash) ? f.FileHash : f.ClipId,
+            FileHash: f.FileHash,
             DurationSeconds: f.DurationSeconds,
             OverallVerdict: f.Verdict,
             MaxConfidence: f.MaxConfidence,
-            Segments: f.Segments.Select(s => new HitSegmentResult(
-                SegmentId: $"{Path.GetFileNameWithoutExtension(f.FilePath)}_{s.StartTimeSeconds:F1}",
+            ErrorMessage: f.Error,
+            AudioTrackIndex: f.AudioTrackIndex,
+            Segments: f.Segments.Select((s, index) => new HitSegmentResult(
+                SegmentId: HitSegmentResult.CreateId(f.FilePath, f.FileHash, index, s.StartTimeSeconds),
                 FilePath: f.FilePath,
                 StartTimeSeconds: s.StartTimeSeconds,
                 EndTimeSeconds: s.EndTimeSeconds,
@@ -779,25 +700,10 @@ public static class Program
                 SegmentEmbedding: s.Embedding,
                 FileHash: f.FileHash)).ToList())).ToList();
 
-        var exportResult = await exporter.ExportReportAsync(fileResults, exportSettings, outputDir);
-        Console.WriteLine($"[EXPORT] Evidence report successfully generated in: {outputDir}");
+        var exportResult = await new EvidenceReportExporter().ExportReportAsync(fileResults, exportSettings, outputDir);
+        Console.WriteLine($"[EXPORT] Evidence report generated in: {outputDir}");
         Console.WriteLine($"  - CSV: {exportResult.CsvPath}");
         Console.WriteLine($"  - PDF: {exportResult.PdfPath}");
         Console.WriteLine($"  - Audio Hits Extracted: {exportResult.ExtractedAudioClipPaths.Count} clip(s)");
-
-        return 0;
-    }
-
-    private static string? GetOptionValue(string[] args, string optionName)
-    {
-        for (int i = 0; i < args.Length; i++)
-        {
-            if (string.Equals(args[i], optionName, StringComparison.OrdinalIgnoreCase) && i + 1 < args.Length)
-            {
-                return args[i + 1];
-            }
-        }
-        return null;
     }
 }
-

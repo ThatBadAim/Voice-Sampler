@@ -75,11 +75,11 @@ Data lives under `LocalApplicationData/VoiceScan` (`~/.local/share/VoiceScan` on
 
 1. **Voice Changers & Heavy Pitch Modification:**
    - Real-time frequency shifters, robot synthesizers, or formant warping alter speaker vocal tract resonance characteristics, moving embeddings outside the cosine decision boundary.
-   - *Mitigation:* Multi-condition enrollment captures Opus compression and gain changes, but severe pitch modifications are tagged as `UNSTABLE_CLUSTER` or `SUSPECTED_OVERLAP`.
+   - *Mitigation:* Multi-condition enrollment captures Opus compression and gain changes, but severe pitch modifications lower the cluster score and surface as `Possible` or `LOW_SNR` hits for review.
 
 2. **Severe Overlapping Speech ("Cocktail Party" Problem):**
    - When multiple players shout simultaneously over gameplay sound effects, neural window embeddings represent an acoustic mixture.
-   - *Mitigation:* Silero VAD filtering combined with Agglomerative Hierarchical Clustering (AHC) separates distinct speech modes within the clip. Overlapped windows are flagged with `SUSPECTED_OVERLAP` and categorized as `Possible` rather than outright false positives.
+   - *Mitigation:* WebRTC VAD filtering combined with Agglomerative Hierarchical Clustering (AHC) separates distinct speech modes within the clip. There is no reliable overlap detector; overlapped speech lowers cluster similarity, so such hits tend to land in `Possible` for review.
 
 3. **Extreme Low SNR (< -5 dB):**
    - High-volume explosions, heavy background music, and synthetic white noise can mask faint whisper audio.
@@ -94,9 +94,9 @@ Data lives under `LocalApplicationData/VoiceScan` (`~/.local/share/VoiceScan` on
 
 | Component | Model / Library | License | Usage In VoiceScan |
 | :--- | :--- | :--- | :--- |
-| **Speaker Embeddings** | WeSpeaker ResNet-34 (VoxCeleb ONNX) | **Apache-2.0** | Commercial & offline permitted. Embedded directly into local engine. |
-| **Speaker Embeddings (Alt)** | CAM++ (3D-Speaker ONNX) | **Apache-2.0** | Compact alternative model option. |
-| **Voice Activity Detection** | Silero VAD v4 ONNX | **MIT** | High-speed offline speech segmentation. |
+| **Speaker Embeddings** | SpeechBrain ECAPA-TDNN (ONNX) | **Apache-2.0** | Default model. Fed SpeechBrain's own Fbank front-end. |
+| **Speaker Embeddings (Alt)** | NVIDIA NeMo TitaNet-Small (ONNX) | **Apache-2.0 / CC-BY-4.0** | Alternative model with NeMo's mel front-end. |
+| **Voice Activity Detection** | Google WebRTC VAD (C# port) | **BSD-3-Clause** | Offline speech segmentation; notice in `THIRD-PARTY-NOTICES.md`. |
 | **Inference Engine** | Microsoft ONNX Runtime (CUDA / CPU) | **MIT** | Native GPU-accelerated and CPU-fallback inference. |
 | **Media Demuxing & Decoding** | FFmpeg (via CLI sub-process) | **LGPL v2.1+ / GPL v2+** | Unmodified executable invocation. Fully compliant with dynamic linking/process execution rules. |
 | **Cache & Review Storage** | Microsoft.Data.Sqlite (SQLite 3) | **Public Domain** | Zero-configuration offline local database storage. |
@@ -123,8 +123,9 @@ Data lives under `LocalApplicationData/VoiceScan` (`~/.local/share/VoiceScan` on
 
 - `engine/VoiceScan.Core/`:
   - `AudioDecoder.cs`: FFmpeg pipe streaming PCM decoder.
-  - `SileroVad.cs`: ONNX-based voice activity detector with adaptive windowing.
-  - `OnnxEmbeddingModel.cs`: ResNet-34 / CAM++ ONNX speaker embedding model with CUDA EP + CPU fallback.
+  - `WebRtcVad.cs`: WebRTC voice activity detector (bit-exact port) with interval post-processing.
+  - `SpeechFeatures.cs`: SpeechBrain and NeMo feature front-ends, verified against the reference implementations.
+  - `OnnxEmbeddingModel.cs`: ECAPA-TDNN / TitaNet ONNX speaker embedding models with CUDA EP + CPU fallback, checksum verification and per-model operating points.
   - `SpeakerClusterer.cs`: Agglomerative hierarchical clustering for within-file speaker separation.
   - `TemporalAggregator.cs`: Hit smoothing, bridge merging, and multi-state verdict assignment.
   - `ScoreNormalizer.cs`: AS-Norm cohort normalization.

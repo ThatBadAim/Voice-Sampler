@@ -3,70 +3,94 @@
              xmlns:vm="using:VoiceScan.App.Core.ViewModels"
              xmlns:m="using:VoiceScan.App.Core.Models"
              xmlns:svc="using:VoiceScan.App.Services"
+             xmlns:c="using:VoiceScan.App.Controls"
              x:Class="VoiceScan.App.Views.ScanDashboardView"
              x:DataType="vm:ScanDashboardViewModel">
 
     <ScrollViewer>
-        <StackPanel Spacing="20" MaxWidth="1100" HorizontalAlignment="Stretch">
-            <StackPanel Spacing="4">
-                <TextBlock Text="Scan Dashboard" Classes="title" />
-                <TextBlock Text="Choose a voice and a folder of recordings. VoiceScan marks where that person speaks." Classes="subtitle" />
-            </StackPanel>
+        <StackPanel Spacing="48" MaxWidth="880" HorizontalAlignment="Stretch">
+            <TextBlock Text="Scan" Classes="title" />
 
             <Border Classes="card">
-                <StackPanel Spacing="12">
-                    <TextBlock Text="Who to find, and where" Classes="heading" />
-                    <ComboBox ItemsSource="{Binding Profiles}" SelectedItem="{Binding SelectedProfile}"
-                              HorizontalAlignment="Stretch" PlaceholderText="Choose a voice (add one under “1. Add a voice”)">
+                <StackPanel Spacing="20">
+                                        <ComboBox ItemsSource="{Binding Profiles}" SelectedItem="{Binding SelectedProfile}"
+                              HorizontalAlignment="Stretch" PlaceholderText="Choose a voice">
                         <ComboBox.ItemTemplate>
                             <DataTemplate x:DataType="m:VoiceProfileSummary">
                                 <TextBlock Text="{Binding Name}" />
                             </DataTemplate>
                         </ComboBox.ItemTemplate>
                     </ComboBox>
-                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
-                        <TextBox x:Name="TargetFolderInput" IsReadOnly="True" PlaceholderText="Folder with your recordings (audio or video, subfolders included)" />
-                        <Button Grid.Column="1" Content="Choose folder…" Click="BrowseFolder_Click" MinWidth="130" />
-                    </Grid>
+                    <TextBlock Text="Recordings" Classes="heading" />
+                    <Border x:Name="DropZone" Classes="callout" DragDrop.AllowDrop="True">
+                        <StackPanel Spacing="16">
+                            <WrapPanel ItemSpacing="12" LineSpacing="12">
+                                <Button Content="Add files…" Click="AddFiles_Click" IsEnabled="{Binding CanEditFiles}" />
+                                <Button Content="Add folder…" Click="AddFolder_Click" IsEnabled="{Binding CanEditFiles}" />
+                                <Button Content="Clear all" Click="ClearFiles_Click" IsEnabled="{Binding CanEditFiles}" />
+                            </WrapPanel>
+                            <ListBox ItemsSource="{Binding TargetFiles}" MaxHeight="340" SelectionMode="Toggle"
+                                     IsVisible="{Binding TargetFiles.Count}">
+                                <ListBox.ItemTemplate>
+                                    <DataTemplate x:DataType="m:MediaFileItem">
+                                        <StackPanel Spacing="10">
+                                            <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="10">
+                                                <TextBlock Text="{Binding FileName}" VerticalAlignment="Center"
+                                                           TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Path}" />
+                                                <Button Grid.Column="1" Content="Waveform" Click="ToggleWaveform_Click" />
+                                                <Button Grid.Column="2" Content="Remove" Click="RemoveFile_Click"
+                                                        IsEnabled="{Binding $parent[ListBox].((vm:ScanDashboardViewModel)DataContext).CanEditFiles}" />
+                                            </Grid>
+                                            <ProgressBar IsIndeterminate="True" IsVisible="{Binding IsLoadingWaveform}" />
+                                            <TextBlock Text="{Binding WaveformError}" Classes="secondary"
+                                                       IsVisible="{Binding WaveformError, Converter={x:Static ObjectConverters.IsNotNull}}" />
+                                            <c:WaveformTimelineControl Envelope="{Binding Waveform}" Height="90" Cursor="Arrow"
+                                                                       IsVisible="{Binding Waveform, Converter={x:Static ObjectConverters.IsNotNull}}" />
+                                        </StackPanel>
+                                    </DataTemplate>
+                                </ListBox.ItemTemplate>
+                            </ListBox>
+                        </StackPanel>
+                    </Border>
                     <Expander Header="Advanced options">
                         <StackPanel Orientation="Horizontal" Spacing="24" Margin="0,8,0,0">
                             <CheckBox x:Name="ClusteringCheckBox" Content="Speaker clustering" IsChecked="{Binding UseClustering}" />
                             <CheckBox x:Name="SmoothingCheckBox" Content="Temporal smoothing" IsChecked="{Binding UseTemporalSmoothing}" />
                         </StackPanel>
                     </Expander>
-                    <StackPanel Orientation="Horizontal" Spacing="8">
-                        <Button Classes="accent" Click="StartScan_Click" IsEnabled="{Binding CanStartScan}">
-                            <StackPanel Orientation="Horizontal" Spacing="8">
+                    <WrapPanel ItemSpacing="12" LineSpacing="12">
+                        <Button Classes="primary" Click="StartScan_Click" IsEnabled="{Binding CanStartScan}">
+                            <StackPanel Orientation="Horizontal" Spacing="12">
                                 <PathIcon Data="{StaticResource IconPlay}" />
                                 <TextBlock Text="Start scan" />
                             </StackPanel>
                         </Button>
                         <Button x:Name="PauseResumeButton" Click="PauseResume_Click" IsEnabled="{Binding IsScanning}">
-                            <StackPanel Orientation="Horizontal" Spacing="8">
+                            <StackPanel Orientation="Horizontal" Spacing="12">
                                 <PathIcon x:Name="PauseResumeIcon" Data="{StaticResource IconPause}" />
                                 <TextBlock x:Name="PauseResumeText" Text="Pause" />
                             </StackPanel>
                         </Button>
                         <Button Click="Cancel_Click" IsEnabled="{Binding IsScanning}">
-                            <StackPanel Orientation="Horizontal" Spacing="8">
+                            <StackPanel Orientation="Horizontal" Spacing="12">
                                 <PathIcon Data="{StaticResource IconStop}" />
                                 <TextBlock Text="Cancel" />
                             </StackPanel>
                         </Button>
-                    </StackPanel>
+                    </WrapPanel>
                     <TextBlock Text="{Binding StatusMessage}" Classes="secondary" />
                 </StackPanel>
             </Border>
 
             <Border Classes="card">
-                <StackPanel Spacing="12">
+                <StackPanel Spacing="20">
                     <Grid ColumnDefinitions="*,Auto">
                         <TextBlock Text="{Binding Progress.CurrentFileName, StringFormat='Scanning: {0}', FallbackValue='Ready.', TargetNullValue='Ready.'}" Classes="heading" />
                         <TextBlock Grid.Column="1" Text="{Binding Progress.OverallProgressPercent, StringFormat={}{0:F0}%}" Classes="heading" />
                     </Grid>
                     <ProgressBar Minimum="0" Maximum="100" Value="{Binding Progress.OverallProgressPercent}" />
-                    <UniformGrid Columns="4">
-                        <StackPanel Spacing="2">
+                    <UniformGrid x:Name="Metrics" Columns="4" Margin="0,8">
+                        <StackPanel Spacing="4">
                             <TextBlock Text="SPEED" Classes="metric-label" />
                             <TextBlock Text="{Binding Progress.RealtimeMultiple, StringFormat={}{0:F1}x}" Classes="metric-value" />
                         </StackPanel>
@@ -80,43 +104,41 @@
                         </StackPanel>
                         <StackPanel>
                             <TextBlock Text="ETA" Classes="metric-label" />
-                            <TextBlock Text="{Binding Progress.EstimatedTimeRemaining, StringFormat={}{0:mm\\:ss}, TargetNullValue='--:--'}" Classes="metric-value" />
+                            <TextBlock Text="{Binding EstimatedTimeRemainingText}" Classes="metric-value" />
                         </StackPanel>
                         <StackPanel>
                             <TextBlock Text="GPU" Classes="metric-label" />
-                            <TextBlock Text="{Binding Progress.GpuUtilizationPercent, StringFormat={}{0:F0} %}" Classes="metric-value" />
+                            <TextBlock Text="{Binding Progress.GpuUtilizationPercent, StringFormat={}{0:F0} %, TargetNullValue='n/a'}" Classes="metric-value" />
                         </StackPanel>
                     </UniformGrid>
-                    <StackPanel Orientation="Horizontal" Spacing="10">
-                        <Border Classes="badge" Background="{DynamicResource VerdictMatchSoftBrush}" Padding="12,5">
-                            <StackPanel Orientation="Horizontal" Spacing="6">
-                                <TextBlock Text="Match" Foreground="{DynamicResource VerdictMatchBrush}" FontSize="12" FontWeight="SemiBold" />
-                                <TextBlock Text="{Binding Progress.TotalMatchesFound}" FontSize="12" FontWeight="SemiBold" />
-                            </StackPanel>
-                        </Border>
-                        <Border Classes="badge" Background="{DynamicResource VerdictPossibleSoftBrush}" Padding="12,5">
-                            <StackPanel Orientation="Horizontal" Spacing="6">
-                                <TextBlock Text="Possible" Foreground="{DynamicResource VerdictPossibleBrush}" FontSize="12" FontWeight="SemiBold" />
-                                <TextBlock Text="{Binding Progress.TotalPossibleFound}" FontSize="12" FontWeight="SemiBold" />
-                            </StackPanel>
-                        </Border>
-                        <Border Classes="badge" Background="{DynamicResource VerdictNoMatchSoftBrush}" Padding="12,5">
-                            <StackPanel Orientation="Horizontal" Spacing="6">
-                                <TextBlock Text="No match" Foreground="{DynamicResource VerdictNoMatchBrush}" FontSize="12" FontWeight="SemiBold" />
-                                <TextBlock Text="{Binding Progress.TotalNoMatchFound}" FontSize="12" FontWeight="SemiBold" />
-                            </StackPanel>
-                        </Border>
-                    </StackPanel>
+                    <WrapPanel ItemSpacing="32" LineSpacing="8">
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <TextBlock Text="Match" Foreground="{DynamicResource VerdictMatchBrush}" />
+                            <TextBlock Text="{Binding Progress.TotalMatchesFound}" />
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <TextBlock Text="Possible" Foreground="{DynamicResource VerdictPossibleBrush}" />
+                            <TextBlock Text="{Binding Progress.TotalPossibleFound}" />
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <TextBlock Text="No match" Foreground="{DynamicResource VerdictNoMatchBrush}" />
+                            <TextBlock Text="{Binding Progress.TotalNoMatchFound}" />
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Spacing="8" IsVisible="{Binding HasErrors}">
+                            <TextBlock Text="Errors" Foreground="{DynamicResource VerdictErrorBrush}" />
+                            <TextBlock Text="{Binding Progress.TotalErrors}" />
+                        </StackPanel>
+                    </WrapPanel>
                 </StackPanel>
             </Border>
 
             <Border Classes="card">
-                <StackPanel Spacing="8">
+                <StackPanel Spacing="12">
                     <TextBlock Text="Scanned Files" Classes="heading" />
                     <ItemsControl ItemsSource="{Binding CompletedFiles}">
                         <ItemsControl.ItemTemplate>
                             <DataTemplate x:DataType="m:FileVerdictResult">
-                                <Grid ColumnDefinitions="*,120,100,80" Margin="0,6">
+                                <Grid ColumnDefinitions="*,120,100,80" Margin="0,10">
                                     <TextBlock Text="{Binding FileName}" TextTrimming="CharacterEllipsis" />
                                     <Border Grid.Column="1" Classes="badge" HorizontalAlignment="Left"
                                             Background="{Binding OverallVerdict, Converter={x:Static svc:VerdictConverters.Background}}">

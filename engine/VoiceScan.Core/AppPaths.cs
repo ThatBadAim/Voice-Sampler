@@ -15,7 +15,15 @@ public static class AppPaths
 
     public static string DatabasePath => Path.Combine(DataRoot, "voicescan.db");
 
-    /// <summary>Directories searched, in order, for ONNX model files.</summary>
+    /// <summary>Decoded-audio spool files. Kept on disk under the data root: the system temp directory is often RAM-backed.</summary>
+    public static string SpoolDirectory => Path.Combine(DataRoot, "spool");
+
+    public static string LogFilePath => Path.Combine(DataRoot, "logs", "voicescan.log");
+
+    /// <summary>
+    /// Directories searched, in order, for ONNX model files. Any file found is still checked against the checksums
+    /// compiled into the engine (<see cref="ModelIntegrity"/>), so a model planted in one of these directories is refused.
+    /// </summary>
     public static string[] ModelSearchDirectories() =>
     [
         Path.Combine(AppContext.BaseDirectory, "models"),

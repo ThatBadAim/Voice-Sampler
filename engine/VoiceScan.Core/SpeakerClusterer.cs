@@ -14,18 +14,15 @@ public sealed class WindowItem
     public double EndTimeSeconds { get; }
     public float[] Embedding { get; }
     public double SnrDb { get; }
-    public bool SuspectedOverlap { get; }
 
     public WindowItem(
         int index,
         double startTimeSeconds,
         double endTimeSeconds,
         float[] embedding,
-        double snrDb = 20.0,
-        bool suspectedOverlap = false)
+        double snrDb = 20.0)
     {
         SnrDb = snrDb;
-        SuspectedOverlap = suspectedOverlap;
         Index = index;
         StartTimeSeconds = startTimeSeconds;
         EndTimeSeconds = endTimeSeconds;
@@ -51,6 +48,13 @@ public sealed class SpeakerCluster
 public static class SpeakerClusterer
 {
     /// <summary>
+    /// Largest number of clusters agglomerated with one dense distance matrix (about 32 MB).
+    /// Longer recordings are clustered block by block in time order and the resulting clusters are
+    /// agglomerated again, so memory stays bounded however many windows a file has.
+    /// </summary>
+    public const int MaxDirectClusterCount = 2000;
+
+    /// <summary>
     /// Clusters speech window embeddings using agglomerative clustering with average linkage.
     /// Distance is cosine distance: d(u, v) = 1.0 - cosine_similarity(u, v).
     /// Merging stops when the minimum inter-cluster distance exceeds distanceThreshold.
@@ -67,28 +71,65 @@ public static class SpeakerClusterer
             return new List<SpeakerCluster>();
         }
 
-        int n = windows.Count;
         int dim = windows[0].Embedding.Length;
-
-        if (n == 1)
+        var nodes = new List<ClusterNode>(windows.Count);
+        foreach (var window in windows)
         {
-            var single = new SpeakerCluster { ClusterId = 0 };
-            single.Windows.Add(windows[0]);
-            single.Centroid = (float[])windows[0].Embedding.Clone();
-            return new List<SpeakerCluster> { single };
+            var node = new ClusterNode(dim);
+            node.Windows.Add(window);
+            node.AddEmbedding(window.Embedding);
+            nodes.Add(node);
         }
 
-        // Initialize clusters: one per window
-        var clusters = new List<ClusterNode>(n);
-        for (int i = 0; i < n; i++)
+        // Average linkage is exact on merged nodes (sum vectors + counts), so later passes over block results
+        // apply the same stopping rule; they only miss merges whose partners were in different blocks while
+        // neither block could shrink further.
+        while (nodes.Count > MaxDirectClusterCount)
         {
-            var node = new ClusterNode(i, dim);
-            node.Windows.Add(windows[i]);
-            node.AddEmbedding(windows[i].Embedding);
-            clusters.Add(node);
+            var reduced = new List<ClusterNode>();
+            for (int start = 0; start < nodes.Count; start += MaxDirectClusterCount)
+            {
+                int count = Math.Min(MaxDirectClusterCount, nodes.Count - start);
+                reduced.AddRange(Agglomerate(nodes.GetRange(start, count), distanceThreshold));
+            }
+
+            if (reduced.Count == nodes.Count)
+            {
+                break; // No block can merge any further.
+            }
+            nodes = reduced;
         }
 
-        // Active cluster indices
+        if (nodes.Count <= MaxDirectClusterCount)
+        {
+            nodes = Agglomerate(nodes, distanceThreshold);
+        }
+
+        var result = new List<SpeakerCluster>(nodes.Count);
+        int clusterId = 0;
+        foreach (var node in nodes)
+        {
+            var cluster = new SpeakerCluster
+            {
+                ClusterId = clusterId++,
+                Centroid = node.ComputeNormalizedCentroid()
+            };
+            cluster.Windows.AddRange(node.Windows.OrderBy(w => w.StartTimeSeconds));
+            result.Add(cluster);
+        }
+
+        return result;
+    }
+
+    /// <summary>Dense average-linkage AHC over at most <see cref="MaxDirectClusterCount"/> nodes, in node order.</summary>
+    private static List<ClusterNode> Agglomerate(List<ClusterNode> clusters, double distanceThreshold)
+    {
+        int n = clusters.Count;
+        if (n <= 1)
+        {
+            return clusters;
+        }
+
         var active = new HashSet<int>(Enumerable.Range(0, n));
 
         // Pairwise distance matrix: dist[i, j] for active clusters
@@ -193,22 +234,7 @@ public static class SpeakerClusterer
             }
         }
 
-        // Finalize resulting clusters
-        var result = new List<SpeakerCluster>();
-        int clusterId = 0;
-        foreach (int idx in active)
-        {
-            var node = clusters[idx];
-            var cluster = new SpeakerCluster
-            {
-                ClusterId = clusterId++,
-                Centroid = node.ComputeNormalizedCentroid()
-            };
-            cluster.Windows.AddRange(node.Windows.OrderBy(w => w.StartTimeSeconds));
-            result.Add(cluster);
-        }
-
-        return result;
+        return active.Order().Select(i => clusters[i]).ToList();
     }
 
     private static double ComputeClusterDistance(ClusterNode a, ClusterNode b)
@@ -231,16 +257,13 @@ public static class SpeakerClusterer
 
     private sealed class ClusterNode
     {
-        public int Id { get; }
         public List<WindowItem> Windows { get; } = new();
         public double[] SumVector { get; }
         public int Count { get; private set; }
 
-        public ClusterNode(int id, int dimension)
+        public ClusterNode(int dimension)
         {
-            Id = id;
             SumVector = new double[dimension];
-            Count = 0;
         }
 
         public void AddEmbedding(float[] emb)

@@ -1,6 +1,44 @@
 # VoiceScan Accuracy & Evolution Log
 
-## Real-speech re-evaluation (2026-10-03) — supersedes the synthetic dev-set numbers below
+## ECAPA / TitaNet operating points (2026-10-04) — supersedes the WeSpeaker numbers below
+
+Commit 095fdef replaced Silero + WeSpeaker/CAM++ with a WebRTC-style VAD and SpeechBrain ECAPA-TDNN / NVIDIA TitaNet-Small, but kept the WeSpeaker thresholds and fed both models Kaldi features they were not trained on (ECAPA cosine to the PyTorch reference: 0.22–0.32). Fixes before measuring:
+- **Front-ends:** `SpeechFeatures` reproduces SpeechBrain `Fbank` (ECAPA) and NeMo `FilterbankFeatures` (TitaNet); golden tests compare against the reference implementations, and ECAPA ONNX embeddings now match SpeechBrain PyTorch at cosine 1.0000.
+- **VAD:** `WebRtcVad` is a bit-exact port of the WebRTC GMM VAD (mode 3, 30 ms); a parity test replays reference frame decisions.
+- **Profiles / cache / cohort:** `ModelVersion` (`model@sha12+front-end`) is stored in profiles, cache keys and scan metadata; incompatible profiles and cohorts are rejected.
+
+Method: same as below (`eval/real_speech_eval.py`, LibriSpeech dev-clean, 20 targets, 240 files, 3.43 h, development data only). Window statistics come from the scan cache (genuine = window ≥ 50 % inside a target turn, impostor = no overlap).
+
+| Model | Window EER | Impostor cosine p99.9 / p99.99 | Genuine median | Competing speaker 0 dB EER |
+|---|---|---|---|---|
+| ECAPA-TDNN | 9.97% | 0.398 / 0.451 | 0.519 | 22.6% |
+| TitaNet-Small | 6.15% | 0.420 / 0.500 | 0.602 | 15.3% |
+
+Operating-point sweep (Match: file recall / absent-file false-flag rate / FA per hr / coverage; Match+Possible likewise; T = match threshold, Possible floor = T − 0.08, c = AHC distance):
+
+| Config | Match | Match+Possible |
+|---|---|---|
+| ECAPA T=0.48 c=0.40 (old placeholder) | 95.0% / 0.0% / 0.0 / 72.9% | 98.3% / 0.0% / 0.9 / 77.2% |
+| ECAPA T=0.44 c=0.40 | 96.7% / 0.0% / 0.0 / 78.1% | 99.2% / 5.8% / 4.3 / 80.5% |
+| ECAPA T=0.40 c=0.40 | 98.3% / 0.8% / 1.2 / 81.9% | 100% / 10.8% / 10.1 / 83.8% |
+| **ECAPA T=0.48 c=0.60 (default)** | 95.0% / 0.0% / 0.0 / 77.5% | 98.3% / 0.8% / 0.9 / 81.3% |
+| ECAPA T=0.50 c=0.60 | 94.2% / 0.0% / 0.0 / 75.3% | 98.3% / 0.0% / 0.3 / 80.8% |
+| ECAPA T=0.48 c=0.60 + AS-Norm cohort | 99.2% / 7.5% / 7.2 / 87.0% | 100% / 10.0% / 9.8 / 87.1% |
+| TitaNet T=0.48 c=0.40 (old placeholder) | 98.3% / 0.0% / 0.0 / 83.1% | 98.3% / 1.7% / 1.2 / 84.8% |
+| TitaNet T=0.50 c=0.58 | 97.5% / 0.0% / 0.0 / 85.3% | 99.2% / 0.8% / 0.6 / 86.4% |
+| **TitaNet T=0.52 c=0.58 (default)** | 97.5% / 0.0% / 0.0 / 85.1% | 98.3% / 0.0% / 0.0 / 86.0% |
+| TitaNet T=0.52 c=0.65 | 96.7% / 0.0% / 0.0 / 84.9% | 98.3% / 0.0% / 0.0 / 86.4% |
+
+Decisions (in `OnnxEmbeddingModel`):
+- The Possible floor (T − 0.08) is placed at or above the window impostor p99.9 cosine: ECAPA 0.40 ≥ 0.398, TitaNet 0.44 ≥ 0.420.
+- AHC merges only clusters whose average cosine reaches the same impostor p99.9 (c = 1 − p99.9): ECAPA 0.60, TitaNet 0.58. Within-file target-vs-other cosine p99 is 0.33 (ECAPA) / 0.34 (TitaNet), below both merge floors.
+- TitaNet is more accurate on every condition and about 3× faster on CPU (4 min vs 12 min for 3.43 h). ECAPA remains the default model name; switching the default is a product decision.
+- AS-Norm stays opt-in: with the ECAPA cohort it raises coverage but flags 7.5% of absent-target files at Match level. `models/impostor_cohort.json` was rebuilt for ECAPA from 73 LibriSpeech train-clean-100 utterances (37 speakers, disjoint from dev-clean): 634 window embeddings. The previous file was WeSpeaker 256-d built from synthetic tones.
+- 20 targets / 120 absent files: one file is 0.8%, so neighbouring rows differ by noise. A held-out set has not been run.
+
+Known VAD limitation: the WebRTC GMM VAD (like the reference implementation) labels steady tones, chords and broadband noise as speech, and mode 3 drops very quiet speech. Non-speech that passes the VAD is handled by the speaker model and thresholds above.
+
+## Real-speech re-evaluation (2026-10-03, WeSpeaker / CAM++, models since replaced) — supersedes the synthetic dev-set numbers below
 
 **The synthetic `eval/dev_dataset` contains no real speech.** `eval/data_config/speech` is 4 distinct 3-second tones/harmonics copied 4 times each; under WeSpeaker different "speakers" score cosine 0.85–0.90, and Silero VAD rejects them. The EER, thresholds, AHC τ and the AS-Norm "failure" in Sections 1–3 below were measured on that data and carry no information about real voices. They are kept only as history.
 
@@ -148,7 +186,8 @@ This document logs the step-by-step implementation, empirical measurement, and a
 ## 3. Best-Performing Engine Configuration
 
 The engine's default production configuration in `VoiceScan.Cli`:
-- **Clustering:** Agglomerative Hierarchical Clustering enabled (`--cluster-threshold 0.40`).
+- **Thresholds:** per model from `OnnxEmbeddingModel` (ECAPA T=0.48, c=0.60; TitaNet T=0.52, c=0.58); see the 2026-10-04 section.
+- **Clustering:** Agglomerative Hierarchical Clustering enabled.
 - **Temporal Smoothing:** Neighbor support + peak thresholding enabled (`--peak-delta 0.04`).
 - **Score Normalization:** Opt-in via `--cohort <file>`.
 - **Verdict Model:** 3-state output (`Match`, `Possible`, `No match`) with per-segment diagnostic reason flags.
@@ -160,17 +199,18 @@ The engine's default production configuration in `VoiceScan.Cli`:
 
 To reproduce the benchmark logs recorded in this document:
 ```bash
-# 1. Run engine tests (24 passing unit tests)
+# 1. Run engine tests
 dotnet test VoiceScan.sln
 
 # 2. Build Release CLI binary
 dotnet build engine/VoiceScan.Cli/VoiceScan.Cli.csproj -c Release
 
-# 3. Benchmark best-performing default configuration on dev-set
+# 3. Benchmark on real speech (development data only)
+python3 eval/real_speech_eval.py run --data-dir <D> --label ecapa --model ecapa
 python3 eval/run_eval.py --scanner cli --scanner-cmd "dotnet engine/VoiceScan.Cli/bin/Release/net10.0/VoiceScan.Cli.dll scan --no-cache" --output-dir eval/reports/best_configuration
 
 # 4. Build impostor cohort using CLI tool
-dotnet engine/VoiceScan.Cli/bin/Release/net10.0/VoiceScan.Cli.dll cohort build --audio eval/data_config/speech/speaker_alpha eval/data_config/speech/speaker_bravo --output models/impostor_cohort.json --model wespeaker
+dotnet engine/VoiceScan.Cli/bin/Release/net10.0/VoiceScan.Cli.dll cohort build --audio <librispeech-train-clean-100-utterances> --output models/impostor_cohort.json --model ecapa
 
 # 5. Compare baseline run vs best-performing configuration
 python3 eval/run_eval.py --compare eval/reports/baseline_cli_initial/eval_results.json eval/reports/step2_temporal_smoothing/eval_results.json

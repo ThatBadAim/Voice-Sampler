@@ -15,7 +15,6 @@ public sealed class ReviewViewModel : INotifyPropertyChanged
 
     private ReviewQueueItem? _selectedItem;
     private string _reviewerNotes = string.Empty;
-    private string? _activeProfilePath;
     private bool _addToProfileOnConfirm = true;
     private string? _statusMessage;
     private bool _isProcessing;
@@ -48,12 +47,6 @@ public sealed class ReviewViewModel : INotifyPropertyChanged
     {
         get => _reviewerNotes;
         set => SetField(ref _reviewerNotes, value);
-    }
-
-    public string? ActiveProfilePath
-    {
-        get => _activeProfilePath;
-        set => SetField(ref _activeProfilePath, value);
     }
 
     public bool AddToProfileOnConfirm
@@ -97,7 +90,7 @@ public sealed class ReviewViewModel : INotifyPropertyChanged
         await RefreshHistoryAsync();
     }
 
-    public void EnqueueSegments(IEnumerable<HitSegmentResult> segments, string profileName, string fileName)
+    public void EnqueueSegments(IEnumerable<HitSegmentResult> segments, string profileName, string fileName, string? profilePath = null)
     {
         foreach (var seg in segments)
         {
@@ -105,7 +98,8 @@ public sealed class ReviewViewModel : INotifyPropertyChanged
                 Segment: seg,
                 FileName: fileName,
                 ProfileName: profileName,
-                DetectedAtUtc: DateTimeOffset.UtcNow));
+                DetectedAtUtc: DateTimeOffset.UtcNow,
+                ProfilePath: profilePath));
         }
 
         if (SelectedItem == null && PendingQueue.Count > 0)
@@ -127,42 +121,28 @@ public sealed class ReviewViewModel : INotifyPropertyChanged
         if (_selectedItem == null || IsProcessing) return;
 
         IsProcessing = true;
-        StatusMessage = "Recording confirmation in SQLite...";
+        StatusMessage = "Recording confirmation...";
 
         var item = _selectedItem;
-        string fileHash = !string.IsNullOrEmpty(item.Segment.FileHash)
-            ? item.Segment.FileHash
-            : FastFileHasher.ComputeFastHash(item.Segment.FilePath);
-
-        var decisionRecord = new ReviewDecisionRecord(
-            SegmentId: item.Segment.SegmentId,
-            FilePath: item.Segment.FilePath,
-            FileHash: fileHash,
-            ProfileName: item.ProfileName,
-            StartTimeSeconds: item.Segment.StartTimeSeconds,
-            EndTimeSeconds: item.Segment.EndTimeSeconds,
-            Confidence: item.Segment.Confidence,
-            OriginalVerdict: item.Segment.Verdict,
-            ReasonFlags: item.Segment.ReasonFlags,
-            Decision: ReviewDecision.Confirmed,
-            DecidedAtUtc: DateTimeOffset.UtcNow,
-            Notes: _reviewerNotes,
-            SegmentEmbedding: item.Segment.SegmentEmbedding);
-
         try
         {
+            var decisionRecord = await Task.Run(() => CreateDecisionRecord(item, ReviewDecision.Confirmed), cancellationToken);
             await _reviewRepository.RecordDecisionAsync(decisionRecord, cancellationToken);
 
-            if (_addToProfileOnConfirm && !string.IsNullOrWhiteSpace(_activeProfilePath) && File.Exists(_activeProfilePath))
+            string profileNote = string.Empty;
+            if (_addToProfileOnConfirm)
             {
-                StatusMessage = "Augmenting voice profile with confirmed speech segment...";
-                await _reviewRepository.AugmentProfileWithConfirmedHitAsync(_activeProfilePath, decisionRecord, cancellationToken);
+                bool added = item.ProfilePath is { } profilePath && File.Exists(profilePath)
+                    && await _reviewRepository.AugmentProfileWithConfirmedHitAsync(profilePath, decisionRecord, cancellationToken);
+                profileNote = added
+                    ? $" Added to voice '{item.ProfileName}'."
+                    : $" Not added to voice '{item.ProfileName}': its profile file is missing or the segment has no usable embedding.";
             }
 
             PendingQueue.Remove(item);
             SelectedItem = PendingQueue.FirstOrDefault();
             await RefreshHistoryAsync(cancellationToken);
-            StatusMessage = $"Confirmed segment [{item.Segment.StartTimeSeconds:F1}s - {item.Segment.EndTimeSeconds:F1}s]. Stored in SQLite.";
+            StatusMessage = $"Confirmed segment [{item.Segment.StartTimeSeconds:F1}s - {item.Segment.EndTimeSeconds:F1}s].{profileNote}";
         }
         catch (Exception ex)
         {
@@ -179,35 +159,17 @@ public sealed class ReviewViewModel : INotifyPropertyChanged
         if (_selectedItem == null || IsProcessing) return;
 
         IsProcessing = true;
-        StatusMessage = "Recording rejection and saving negative cohort in SQLite...";
+        StatusMessage = "Recording rejection...";
 
         var item = _selectedItem;
-        string fileHash = !string.IsNullOrEmpty(item.Segment.FileHash)
-            ? item.Segment.FileHash
-            : FastFileHasher.ComputeFastHash(item.Segment.FilePath);
-
-        var decisionRecord = new ReviewDecisionRecord(
-            SegmentId: item.Segment.SegmentId,
-            FilePath: item.Segment.FilePath,
-            FileHash: fileHash,
-            ProfileName: item.ProfileName,
-            StartTimeSeconds: item.Segment.StartTimeSeconds,
-            EndTimeSeconds: item.Segment.EndTimeSeconds,
-            Confidence: item.Segment.Confidence,
-            OriginalVerdict: item.Segment.Verdict,
-            ReasonFlags: item.Segment.ReasonFlags,
-            Decision: ReviewDecision.Rejected,
-            DecidedAtUtc: DateTimeOffset.UtcNow,
-            Notes: _reviewerNotes,
-            SegmentEmbedding: item.Segment.SegmentEmbedding);
-
         try
         {
+            var decisionRecord = await Task.Run(() => CreateDecisionRecord(item, ReviewDecision.Rejected), cancellationToken);
             await _reviewRepository.RecordDecisionAsync(decisionRecord, cancellationToken);
             PendingQueue.Remove(item);
             SelectedItem = PendingQueue.FirstOrDefault();
             await RefreshHistoryAsync(cancellationToken);
-            StatusMessage = $"Rejected segment [{item.Segment.StartTimeSeconds:F1}s - {item.Segment.EndTimeSeconds:F1}s] stored as negative.";
+            StatusMessage = $"Rejected segment [{item.Segment.StartTimeSeconds:F1}s - {item.Segment.EndTimeSeconds:F1}s].";
         }
         catch (Exception ex)
         {
@@ -218,6 +180,27 @@ public sealed class ReviewViewModel : INotifyPropertyChanged
             IsProcessing = false;
         }
     }
+
+    /// <summary>
+    /// The decision id combines profile and segment: the same segment can be judged separately for each voice,
+    /// and a decision for one voice never overwrites another's.
+    /// </summary>
+    private ReviewDecisionRecord CreateDecisionRecord(ReviewQueueItem item, ReviewDecision decision) => new(
+        SegmentId: $"{item.ProfileName}|{item.Segment.SegmentId}",
+        FilePath: item.Segment.FilePath,
+        FileHash: !string.IsNullOrEmpty(item.Segment.FileHash)
+            ? item.Segment.FileHash
+            : FastFileHasher.ComputeFastHash(item.Segment.FilePath),
+        ProfileName: item.ProfileName,
+        StartTimeSeconds: item.Segment.StartTimeSeconds,
+        EndTimeSeconds: item.Segment.EndTimeSeconds,
+        Confidence: item.Segment.Confidence,
+        OriginalVerdict: item.Segment.Verdict,
+        ReasonFlags: item.Segment.ReasonFlags,
+        Decision: decision,
+        DecidedAtUtc: DateTimeOffset.UtcNow,
+        Notes: _reviewerNotes,
+        SegmentEmbedding: item.Segment.SegmentEmbedding);
 
     public async Task RefreshHistoryAsync(CancellationToken cancellationToken = default)
     {

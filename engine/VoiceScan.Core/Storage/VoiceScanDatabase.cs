@@ -177,6 +177,40 @@ public sealed class VoiceScanDatabase : IDisposable
             await cmd.ExecuteNonQueryAsync(cancellationToken);
             await tx.CommitAsync(cancellationToken);
         }
+
+        if (currentVersion < 3)
+        {
+            // Rows cached before this migration keep duration 0 and no waveform; the scanner falls back to ffprobe for them.
+            using var tx = connection.BeginTransaction();
+            using var cmd = connection.CreateCommand();
+            cmd.Transaction = tx;
+            cmd.CommandText = @"
+                ALTER TABLE embeddings_cache ADD COLUMN duration_seconds REAL NOT NULL DEFAULT 0;
+                ALTER TABLE embeddings_cache ADD COLUMN waveform_min BLOB;
+                ALTER TABLE embeddings_cache ADD COLUMN waveform_max BLOB;
+                INSERT INTO schema_migrations (version, applied_at, description)
+                VALUES (3, datetime('now'), 'Duration and waveform envelope in the embedding cache');
+            ";
+            await cmd.ExecuteNonQueryAsync(cancellationToken);
+            await tx.CommitAsync(cancellationToken);
+        }
+
+        if (currentVersion < 4)
+        {
+            // Embeddings cached before the WebRTC VAD port and the model-specific front-ends can never be hit again
+            // (their cache keys changed), so they are dropped instead of left to bloat the file.
+            using var tx = connection.BeginTransaction();
+            using var cmd = connection.CreateCommand();
+            cmd.Transaction = tx;
+            cmd.CommandText = @"
+                DELETE FROM embeddings_cache;
+                ALTER TABLE profiles ADD COLUMN model_fingerprint TEXT NOT NULL DEFAULT '';
+                INSERT INTO schema_migrations (version, applied_at, description)
+                VALUES (4, datetime('now'), 'Model fingerprint on profiles; drop embeddings from the old front-end');
+            ";
+            await cmd.ExecuteNonQueryAsync(cancellationToken);
+            await tx.CommitAsync(cancellationToken);
+        }
     }
 
     #region Cache Key Computation
@@ -208,11 +242,12 @@ public sealed class VoiceScanDatabase : IDisposable
 
         using var cmd = connection.CreateCommand();
         cmd.CommandText = @"
-            INSERT INTO profiles (name, created_at, model_version, centroid, enrollment_embeddings, clip_count, total_speech_duration_seconds)
-            VALUES (@name, @created_at, @model_version, @centroid, @enrollment_embeddings, @clip_count, @total_speech_duration_seconds)
+            INSERT INTO profiles (name, created_at, model_version, model_fingerprint, centroid, enrollment_embeddings, clip_count, total_speech_duration_seconds)
+            VALUES (@name, @created_at, @model_version, @model_fingerprint, @centroid, @enrollment_embeddings, @clip_count, @total_speech_duration_seconds)
             ON CONFLICT(name) DO UPDATE SET
                 created_at = excluded.created_at,
                 model_version = excluded.model_version,
+                model_fingerprint = excluded.model_fingerprint,
                 centroid = excluded.centroid,
                 enrollment_embeddings = excluded.enrollment_embeddings,
                 clip_count = excluded.clip_count,
@@ -222,6 +257,7 @@ public sealed class VoiceScanDatabase : IDisposable
         cmd.Parameters.AddWithValue("@name", profile.ProfileName);
         cmd.Parameters.AddWithValue("@created_at", profile.CreatedAt);
         cmd.Parameters.AddWithValue("@model_version", profile.ModelId);
+        cmd.Parameters.AddWithValue("@model_fingerprint", profile.ModelVersion);
         cmd.Parameters.AddWithValue("@centroid", centroidBytes);
         cmd.Parameters.AddWithValue("@enrollment_embeddings", embsBytes);
         cmd.Parameters.AddWithValue("@clip_count", profile.ClipCount);
@@ -237,7 +273,7 @@ public sealed class VoiceScanDatabase : IDisposable
         await connection.OpenAsync(cancellationToken);
 
         using var cmd = connection.CreateCommand();
-        cmd.CommandText = "SELECT name, created_at, model_version, centroid, enrollment_embeddings, clip_count, total_speech_duration_seconds FROM profiles WHERE name = @name;";
+        cmd.CommandText = "SELECT name, created_at, model_version, centroid, enrollment_embeddings, clip_count, total_speech_duration_seconds, model_fingerprint FROM profiles WHERE name = @name;";
         cmd.Parameters.AddWithValue("@name", profileName);
 
         using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
@@ -253,6 +289,7 @@ public sealed class VoiceScanDatabase : IDisposable
         byte[] embsBytes = (byte[])reader[4];
         int clipCount = reader.GetInt32(5);
         double speechDur = reader.GetDouble(6);
+        string modelVersion = reader.GetString(7);
 
         float[] centroid = BytesToFloatArray(centroidBytes);
         var embs = JsonSerializer.Deserialize<List<float[]>>(Encoding.UTF8.GetString(embsBytes)) ?? new List<float[]>();
@@ -262,6 +299,7 @@ public sealed class VoiceScanDatabase : IDisposable
             ProfileName = name,
             CreatedAt = createdAt,
             ModelId = modelId,
+            ModelVersion = modelVersion,
             Centroid = centroid,
             EnrollmentEmbeddings = embs,
             ClipCount = clipCount,
@@ -311,22 +349,30 @@ public sealed class VoiceScanDatabase : IDisposable
 
     #region Embeddings Cache
 
-    public async Task<IReadOnlyList<CachedWindow>?> GetCachedWindowsAsync(string cacheKey, CancellationToken cancellationToken = default)
+    public async Task<IReadOnlyList<CachedWindow>?> GetCachedWindowsAsync(string cacheKey, CancellationToken cancellationToken = default) =>
+        (await GetCachedScanAsync(cacheKey, cancellationToken))?.Windows;
+
+    public async Task<CachedScan?> GetCachedScanAsync(string cacheKey, CancellationToken cancellationToken = default)
     {
         await EnsureInitializedAsync(cancellationToken);
         using var connection = new SqliteConnection(_connectionString);
         await connection.OpenAsync(cancellationToken);
 
         using var getCacheCmd = connection.CreateCommand();
-        getCacheCmd.CommandText = "SELECT id, window_count FROM embeddings_cache WHERE cache_key = @key;";
+        getCacheCmd.CommandText = "SELECT id, duration_seconds, waveform_min, waveform_max FROM embeddings_cache WHERE cache_key = @key;";
         getCacheCmd.Parameters.AddWithValue("@key", cacheKey);
 
         long? cacheId = null;
+        CachedFileInfo info = new(0.0);
         using (var reader = await getCacheCmd.ExecuteReaderAsync(cancellationToken))
         {
             if (await reader.ReadAsync(cancellationToken))
             {
                 cacheId = reader.GetInt64(0);
+                info = new CachedFileInfo(
+                    reader.GetDouble(1),
+                    reader.IsDBNull(2) ? null : BytesToFloatArray((byte[])reader[2]),
+                    reader.IsDBNull(3) ? null : BytesToFloatArray((byte[])reader[3]));
             }
         }
 
@@ -335,10 +381,9 @@ public sealed class VoiceScanDatabase : IDisposable
             return null; // Cache miss
         }
 
-        // Fetch windows
         using var fetchCmd = connection.CreateCommand();
         fetchCmd.CommandText = @"
-            SELECT start_time_seconds, end_time_seconds, embedding, snr_db, suspected_overlap
+            SELECT start_time_seconds, end_time_seconds, embedding, snr_db
             FROM cached_window_embeddings
             WHERE cache_id = @cid
             ORDER BY window_index ASC;";
@@ -352,10 +397,10 @@ public sealed class VoiceScanDatabase : IDisposable
             double end = winReader.GetDouble(1);
             byte[] embBytes = (byte[])winReader[2];
             float[] emb = BytesToFloatArray(embBytes);
-            list.Add(new CachedWindow(start, end, emb, winReader.GetDouble(3), winReader.GetInt64(4) != 0));
+            list.Add(new CachedWindow(start, end, emb, winReader.GetDouble(3)));
         }
 
-        return list;
+        return new CachedScan(list, info);
     }
 
     public async Task SaveCachedWindowsAsync(
@@ -365,7 +410,8 @@ public sealed class VoiceScanDatabase : IDisposable
         string vadSettings,
         string windowSettings,
         IReadOnlyList<CachedWindow> windows,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        CachedFileInfo? fileInfo = null)
     {
         await EnsureInitializedAsync(cancellationToken);
         using var connection = new SqliteConnection(_connectionString);
@@ -378,11 +424,14 @@ public sealed class VoiceScanDatabase : IDisposable
             using var insCacheCmd = connection.CreateCommand();
             insCacheCmd.Transaction = tx;
             insCacheCmd.CommandText = @"
-                INSERT INTO embeddings_cache (cache_key, file_hash, model_version, vad_settings, window_settings, window_count, created_at)
-                VALUES (@key, @fhash, @model, @vad, @win, @wcount, datetime('now'))
+                INSERT INTO embeddings_cache (cache_key, file_hash, model_version, vad_settings, window_settings, window_count, created_at, duration_seconds, waveform_min, waveform_max)
+                VALUES (@key, @fhash, @model, @vad, @win, @wcount, datetime('now'), @dur, @wmin, @wmax)
                 ON CONFLICT(cache_key) DO UPDATE SET
                     window_count = excluded.window_count,
-                    created_at = excluded.created_at;
+                    created_at = excluded.created_at,
+                    duration_seconds = excluded.duration_seconds,
+                    waveform_min = excluded.waveform_min,
+                    waveform_max = excluded.waveform_max;
                 SELECT id FROM embeddings_cache WHERE cache_key = @key;";
 
             insCacheCmd.Parameters.AddWithValue("@key", cacheKey);
@@ -391,6 +440,9 @@ public sealed class VoiceScanDatabase : IDisposable
             insCacheCmd.Parameters.AddWithValue("@vad", vadSettings);
             insCacheCmd.Parameters.AddWithValue("@win", windowSettings);
             insCacheCmd.Parameters.AddWithValue("@wcount", windows.Count);
+            insCacheCmd.Parameters.AddWithValue("@dur", fileInfo?.DurationSeconds ?? 0.0);
+            insCacheCmd.Parameters.AddWithValue("@wmin", fileInfo?.WaveformMinPeaks is { } mn ? FloatArrayToBytes(mn) : DBNull.Value);
+            insCacheCmd.Parameters.AddWithValue("@wmax", fileInfo?.WaveformMaxPeaks is { } mx ? FloatArrayToBytes(mx) : DBNull.Value);
 
             var cidObj = await insCacheCmd.ExecuteScalarAsync(cancellationToken);
             long cacheId = Convert.ToInt64(cidObj);
@@ -407,7 +459,7 @@ public sealed class VoiceScanDatabase : IDisposable
             insWinCmd.Transaction = tx;
             insWinCmd.CommandText = @"
                 INSERT INTO cached_window_embeddings (cache_id, window_index, start_time_seconds, end_time_seconds, embedding, snr_db, suspected_overlap)
-                VALUES (@cid, @widx, @start, @end, @emb, @snr, @ovl);";
+                VALUES (@cid, @widx, @start, @end, @emb, @snr, 0);";
 
             var pCid = insWinCmd.Parameters.Add("@cid", SqliteType.Integer);
             var pWidx = insWinCmd.Parameters.Add("@widx", SqliteType.Integer);
@@ -415,7 +467,6 @@ public sealed class VoiceScanDatabase : IDisposable
             var pEnd = insWinCmd.Parameters.Add("@end", SqliteType.Real);
             var pEmb = insWinCmd.Parameters.Add("@emb", SqliteType.Blob);
             var pSnr = insWinCmd.Parameters.Add("@snr", SqliteType.Real);
-            var pOvl = insWinCmd.Parameters.Add("@ovl", SqliteType.Integer);
 
             pCid.Value = cacheId;
 
@@ -429,7 +480,6 @@ public sealed class VoiceScanDatabase : IDisposable
                 pEnd.Value = w.EndTimeSeconds;
                 pEmb.Value = embBytes;
                 pSnr.Value = w.SnrDb;
-                pOvl.Value = w.SuspectedOverlap ? 1 : 0;
 
                 await insWinCmd.ExecuteNonQueryAsync(cancellationToken);
             }
@@ -455,13 +505,15 @@ public sealed class VoiceScanDatabase : IDisposable
         using var cmd = connection.CreateCommand();
         if (!string.IsNullOrEmpty(modelVersion) && !string.IsNullOrEmpty(fileHash))
         {
-            cmd.CommandText = "DELETE FROM embeddings_cache WHERE model_version = @model AND file_hash = @hash;";
+            cmd.CommandText = "DELETE FROM embeddings_cache WHERE (model_version = @model OR model_version LIKE @modelPrefix) AND file_hash = @hash;";
+            cmd.Parameters.AddWithValue("@modelPrefix", modelVersion + "@%");
             cmd.Parameters.AddWithValue("@model", modelVersion);
             cmd.Parameters.AddWithValue("@hash", fileHash);
         }
         else if (!string.IsNullOrEmpty(modelVersion))
         {
-            cmd.CommandText = "DELETE FROM embeddings_cache WHERE model_version = @model;";
+            cmd.CommandText = "DELETE FROM embeddings_cache WHERE model_version = @model OR model_version LIKE @modelPrefix;";
+            cmd.Parameters.AddWithValue("@modelPrefix", modelVersion + "@%");
             cmd.Parameters.AddWithValue("@model", modelVersion);
         }
         else if (!string.IsNullOrEmpty(fileHash))
@@ -527,8 +579,13 @@ public sealed class VoiceScanDatabase : IDisposable
         using var connection = new SqliteConnection(_connectionString);
         await connection.OpenAsync(cancellationToken);
 
+        // A rescan replaces the stored result instead of growing the table on every run.
+        using var tx = connection.BeginTransaction();
         using var cmd = connection.CreateCommand();
+        cmd.Transaction = tx;
         cmd.CommandText = @"
+            DELETE FROM scan_results
+            WHERE file_hash = @fhash AND profile_name = @prof AND model_id = @model AND threshold = @thresh;
             INSERT INTO scan_results (file_path, file_hash, profile_name, model_id, threshold, verdict, max_confidence, segments_json, scanned_at)
             VALUES (@path, @fhash, @prof, @model, @thresh, @verdict, @maxconf, @segjson, datetime('now'));";
 
@@ -542,6 +599,7 @@ public sealed class VoiceScanDatabase : IDisposable
         cmd.Parameters.AddWithValue("@segjson", segmentsJson);
 
         await cmd.ExecuteNonQueryAsync(cancellationToken);
+        await tx.CommitAsync(cancellationToken);
     }
 
     #endregion

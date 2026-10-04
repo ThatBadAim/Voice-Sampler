@@ -11,13 +11,17 @@ public interface IAudioQualityAnalyzer
 
 public sealed class AudioQualityAnalyzer : IAudioQualityAnalyzer
 {
-    private readonly SileroVad? _vadDetector;
+    private readonly WebRtcVad _vadDetector;
 
-    public AudioQualityAnalyzer(SileroVad? vadDetector = null)
+    public AudioQualityAnalyzer(WebRtcVad? vadDetector = null)
     {
-        _vadDetector = vadDetector;
+        _vadDetector = vadDetector ?? new WebRtcVad();
     }
 
+    /// <summary>
+    /// Checks exactly the audio enrollment will use: the first <see cref="ProfileEnrollmentService.MaxSecondsPerClip"/>
+    /// seconds of the file.
+    /// </summary>
     public async Task<AudioQualityReport> AnalyzeAudioAsync(string audioFilePath, CancellationToken cancellationToken = default)
     {
         if (!File.Exists(audioFilePath))
@@ -25,19 +29,10 @@ public sealed class AudioQualityAnalyzer : IAudioQualityAnalyzer
             throw new FileNotFoundException("Audio file not found for quality analysis.", audioFilePath);
         }
 
-        // Stream audio via AudioDecoder
-        List<float> allSamples = [];
-        await foreach (var chunk in AudioDecoder.StreamDecodeAsync(audioFilePath, cancellationToken: cancellationToken))
-        {
-            allSamples.AddRange(chunk.Samples);
-            // Cap analysis at 60 seconds to keep UI responsive
-            if (allSamples.Count >= 60 * 16000)
-            {
-                break;
-            }
-        }
+        float[] samples = await AudioDecoder.DecodeEntireFileAsync(
+            audioFilePath, cancellationToken: cancellationToken, maxDurationSeconds: ProfileEnrollmentService.MaxSecondsPerClip);
 
-        if (allSamples.Count == 0)
+        if (samples.Length == 0)
         {
             return new AudioQualityReport(
                 Tier: AudioQualityTier.Rejected,
@@ -51,7 +46,7 @@ public sealed class AudioQualityAnalyzer : IAudioQualityAnalyzer
                 IsAcceptableForEnrollment: false);
         }
 
-        return AnalyzePcm(allSamples.ToArray(), 16000);
+        return AnalyzePcm(samples, 16000);
     }
 
     public AudioQualityReport AnalyzePcm(ReadOnlySpan<float> pcm16k, int sampleRate = 16000)
@@ -62,7 +57,7 @@ public sealed class AudioQualityAnalyzer : IAudioQualityAnalyzer
         float[] samplesArray = pcm16k.ToArray();
         double snrDb = AcousticDiagnostics.EstimateSnrDb(samplesArray);
 
-        // Calculate noise floor RMS (bottom 10% energy frames)
+        // Calculate noise floor RMS (bottom 15% energy frames)
         int frameSize = sampleRate / 20; // 50ms frames
         int numFrames = pcm16k.Length / frameSize;
         List<double> frameEnergies = new(Math.Max(1, numFrames));
@@ -87,20 +82,8 @@ public sealed class AudioQualityAnalyzer : IAudioQualityAnalyzer
             noiseFloorRms = frameEnergies.Take(bottomCount).Average();
         }
 
-        // Speech duration estimation: use VAD if available, or energy-based threshold
-        double speechDuration = 0.0;
-        if (_vadDetector != null)
-        {
-            var intervals = _vadDetector.DetectSpeechIntervals(samplesArray);
-            speechDuration = intervals.Sum(x => x.EndTimeSeconds - x.StartTimeSeconds);
-        }
-        else
-        {
-            // Energy-based VAD fallback
-            double speechThreshold = Math.Max(0.015, noiseFloorRms * 3.0);
-            int speechFrames = frameEnergies.Count(e => e > speechThreshold);
-            speechDuration = speechFrames * 0.050; // 50ms per frame
-        }
+        // Speech duration from the same voice activity detector enrollment uses.
+        double speechDuration = _vadDetector.DetectSpeechIntervals(samplesArray).Sum(x => x.EndTimeSeconds - x.StartTimeSeconds);
 
         bool minSpeechMet = speechDuration >= 4.0;
         bool snrMet = snrDb >= 10.0;

@@ -28,7 +28,6 @@ Score Distribution:
 ### Diagnostic Reason Flags
 For any segment flagged as `Possible` (and low-confidence `Match`), the engine attaches diagnostic reason flags:
 - `LOW_SNR`: Estimated signal-to-noise ratio is low (speech masked by heavy game noise, explosions, or soundtrack).
-- `SUSPECTED_OVERLAP`: Concurrent multi-speaker speech detected in the window.
 - `SHORT_SEGMENT`: Speech duration is under minimum duration (e.g. $< 1.0\,\text{s}$), reducing embedding stability.
 - `CODEC_DEGRADATION`: Extreme compression artifacts (e.g. low-bitrate Opus Discord stream).
 
@@ -44,7 +43,7 @@ flowchart TD
     C -- No: Single Mix --> E[Mixed Audio Stream]
     D --> F[16 kHz Mono Float PCM Stream]
     E --> F
-    F --> G[Silero VAD - Speech Interval Detection]
+    F --> G[WebRTC VAD - Speech Interval Detection]
     G --> H[Sliding Windowing: 2s Window, 1s Hop]
     H --> I[Batched ONNX Embedding Extraction on CUDA]
     I --> J[Within-File Speaker Clustering - AHC]
@@ -54,12 +53,12 @@ flowchart TD
 ```
 
 ### Pipeline Stages
-1. **Decode:** FFmpeg streams audio directly to 16 kHz mono 32-bit float PCM in chunks. multi-hour files stream through a bounded memory ring buffer, preventing memory growth.
+1. **Decode:** FFmpeg streams audio directly to 16 kHz mono 32-bit float PCM in chunks into a disk spool under `LocalApplicationData/VoiceScan/spool` (not the system temp directory, which is often RAM-backed), so memory stays bounded for multi-hour files. A decode that FFmpeg reports as failed is an error, never a shorter file.
 2. **Optional Multi-Track Select:** Media containers (MKV, MP4) are inspected for multiple audio tracks. If a dedicated voice-chat or microphone track is present (standard in OBS multi-track recording), the engine selects it directly, bypassing background game separation.
-3. **Voice Activity Detection (VAD):** Silero VAD (ONNX) operates on streaming frames to filter out non-speech regions (silence, pure gunshots, background music) and outputs speech intervals.
+3. **Voice Activity Detection (VAD):** A bit-exact C# port of the Google WebRTC VAD (two-Gaussian speech/noise model over six sub-band energies, adaptive noise tracking) classifies 30 ms frames; runs shorter than 0.25 s are dropped, gaps under 0.3 s are bridged and intervals are padded by 30 ms. Like the reference, it labels stationary noise and steady tones as speech, so it removes silence and quiet background rather than all game audio; clustering and scoring handle the rest.
 4. **Windowing:** Fixed 2.0-second sliding windows with a 1.0-second hop (50% overlap) extracted strictly across active speech regions.
-5. **Speaker Embedding Extraction:** Batched ONNX Runtime GPU inference (using models such as WeSpeaker ResNet34, CAM++, or ECAPA-TDNN) converts each speech window into a fixed-dimensional unit-normalized vector.
-6. **Within-File Speaker Clustering:** Agglomerative Hierarchical Clustering (AHC) clusters all window embeddings within the file into speaker identities. A cluster centroid embedding is computed per speaker turn. Scoring clusters rather than individual noisy windows eliminates single-frame false alarms.
+5. **Speaker Embedding Extraction:** Batched ONNX Runtime inference converts each speech window into a unit-normalized vector. Supported models are SpeechBrain ECAPA-TDNN (default) and NVIDIA NeMo TitaNet-Small, each fed the exact feature front-end it was trained with (`SpeechFeatures`: SpeechBrain `Fbank` in dB with sentence mean normalization; NeMo log-mel with per-feature normalization), verified against the reference implementations. Each model has its own measured operating point (match threshold, clustering distance).
+6. **Within-File Speaker Clustering:** Agglomerative Hierarchical Clustering (AHC, average linkage) clusters all window embeddings within the file into speaker identities. A cluster centroid embedding is computed per speaker. Scoring clusters rather than individual noisy windows eliminates single-frame false alarms. Files with more than 2,000 windows are clustered in contiguous blocks whose clusters are then agglomerated again with the same rule, so memory stays bounded for any recording length.
 7. **Cluster Scoring with Score Normalization:** Cosine similarity between target profile centroid and file cluster embeddings. Adaptive Symmetric Score Normalization (AS-Norm) calibrates similarity scores against a pre-indexed cohort of non-target impostor embeddings.
 8. **Temporal Smoothing & Segment Aggregation:** Window-level and cluster-level scores are mapped back to audio timestamps. Adjacent hits within $\Delta t_{\text{merge}}$ (e.g., 0.5s) are merged into continuous speech turns. Isolated single-window spikes lacking temporal support are discarded.
 9. **Verdict & Segment Generation:** Output formatted as timestamped segments with start/end times, verdict classification, confidence score, and reason flags. Confidence is the cluster cosine similarity to the profile, or a fixed sigmoid of the AS-Norm z-score when a cohort is supplied; it is not a calibrated probability until a calibration is fitted on labelled real-speech trials.
@@ -87,8 +86,8 @@ Scanning multi-hour libraries for multiple voice profiles requires fast re-scan 
 ### Design Invariants
 1. **Deterministic Cache Keying:**
    - `FileHash`: Hybrid file hash (file size + head/tail 1MB samples + periodic block sampling, with optional full SHA-256 validation).
-   - `ModelVersion`: Identifier of the embedding model and weights.
-   - `VADSettings`: Threshold, speech pad, and minimum duration configuration.
+   - `ModelVersion`: Model id, SHA-256 prefix of the weights and feature front-end fingerprint (e.g. `speechbrain-ecapa-tdnn@75f5f36d2387+sb-fbank80-v1`). Voice profiles record the same value; a profile is only scanned with the exact model version that enrolled it.
+   - `VADSettings`: VAD algorithm and mode, minimum speech/silence and padding.
    - `WindowSettings`: Window duration (2.0s) and hop step (1.0s).
 2. **Instant Multi-Profile Re-Scan:** When scanning a new voice profile against a previously processed audio collection, Stages 1 through 5 are skipped. Embeddings are read directly from SQLite, reducing scan duration from minutes to seconds per file.
 3. **Invalidation Semantics:** Changing model architecture, weights, or windowing invalidates cached embeddings. Adding or updating a voice profile invalidates only scoring verdicts.
@@ -137,12 +136,12 @@ The user application layer (`/app`) provides an Avalonia UI (Fluent theme, dark 
 
 4. **Review Queue & Active Learning (`ReviewView`):**
    - Human-in-the-loop review interface: Confirm or Reject segment hits.
-   - Confirmed segments incrementally update the voice profile centroid.
-   - Rejected segments populate the local impostor negative cohort in SQLite (`ReviewDatabase`).
+   - Confirmed segments are added (as one embedding each) to the voice profile they were scanned against, and the centroid is recomputed as the mean of all profile embeddings.
+   - Decisions are stored per voice and segment in SQLite (`ReviewDatabase`).
 
 5. **Evidence Report Export & Local Auditing (`EvidenceReportExporter`):**
    - Forensic-grade audit reports exported directly in PDF 1.4 and CSV formats.
-   - Per-segment audit fields: SHA-256 media hash, timestamps, verdict, confidence, reason flags, profile name, model version, settings snapshot, and scan date.
+   - Per-segment audit fields: media hash, timestamps, verdict, confidence, reason flags, scan errors, audio track, profile name, model version, the settings snapshot of the scan that produced the results, and its start time. CSV fields are quoted and spreadsheet formulas neutralized.
    - Hit audio slicer extracting 16 kHz WAV audio clips into `audio_hits/` for immediate playback and external review.
-   - Thread-safe local file logging to `logs/voicescan.log` with automatic CUDA fallback warnings and error recovery.
+   - Thread-safe local file logging to `LocalApplicationData/VoiceScan/logs/voicescan.log` with automatic CUDA fallback warnings and error recovery.
 

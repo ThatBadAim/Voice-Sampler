@@ -9,19 +9,29 @@ using System.Threading.Tasks;
 
 public sealed class ProfileEnrollmentService
 {
-    private readonly ISpeakerEmbeddingModel _embeddingModel;
-    private readonly SileroVad _vad;
+    /// <summary>
+    /// Only this much audio from the start of each enrollment clip is used (and quality-checked). Enrollment needs
+    /// seconds of clean speech, and the cap keeps a long file from exhausting memory.
+    /// </summary>
+    public const double MaxSecondsPerClip = 600.0;
 
-    public ProfileEnrollmentService(ISpeakerEmbeddingModel embeddingModel, SileroVad vad)
+    private const int EmbeddingBatchSize = 32;
+
+    private readonly ISpeakerEmbeddingModel _embeddingModel;
+    private readonly WebRtcVad _vad;
+
+    public ProfileEnrollmentService(ISpeakerEmbeddingModel embeddingModel, WebRtcVad vad)
     {
         _embeddingModel = embeddingModel ?? throw new ArgumentNullException(nameof(embeddingModel));
         _vad = vad ?? throw new ArgumentNullException(nameof(vad));
     }
 
+    public ISpeakerEmbeddingModel EmbeddingModel => _embeddingModel;
+
+    /// <exception cref="InvalidDataException">A clip contains no detectable speech.</exception>
     public async Task<VoiceProfile> EnrollProfileAsync(
         IReadOnlyList<string> audioFilePaths,
         string profileName,
-        float vadThreshold = 0.5f,
         bool multiCondition = false,
         CancellationToken cancellationToken = default)
     {
@@ -40,84 +50,86 @@ public sealed class ProfileEnrollmentService
                 throw new FileNotFoundException($"Enrollment audio file not found: {path}");
             }
 
-            float[] audio = await AudioDecoder.DecodeEntireFileAsync(path, cancellationToken: cancellationToken);
-            var intervals = _vad.DetectSpeechIntervals(audio, vadThreshold);
-
-            if (intervals.Count == 0)
+            float[] audio = await AudioDecoder.DecodeEntireFileAsync(
+                path, cancellationToken: cancellationToken, maxDurationSeconds: MaxSecondsPerClip);
+            var intervals = _vad.DetectSpeechIntervals(audio);
+            var plans = SpeechWindowExtractor.PlanWindows(audio.Length, intervals);
+            if (plans.Count == 0)
             {
-                intervals = new[] { new SpeechInterval(0.0, (double)audio.Length / 16000) };
+                throw new InvalidDataException(
+                    $"No speech was detected in '{Path.GetFileName(path)}'. Use a recording where the person talks clearly for a few seconds.");
             }
 
             foreach (var interval in intervals)
             {
-                totalSpeechDuration += (interval.EndTimeSeconds - interval.StartTimeSeconds);
+                totalSpeechDuration += interval.EndTimeSeconds - interval.StartTimeSeconds;
             }
 
-            var cleanWindows = SpeechWindowExtractor.ExtractWindows(audio, intervals);
-            var windowAudios = cleanWindows.Select(w => w.AudioSamples).ToList();
-
-            if (multiCondition && cleanWindows.Count > 0)
+            var sources = new List<float[]> { audio };
+            if (multiCondition)
             {
                 // Multi-condition enrollment: augment with AGC, game noise, and codec degradation
-                float[] agcAudio = AudioAugmenter.ApplyAgc(audio);
-                float[] noiseAudio = AudioAugmenter.ApplyNoiseMix(audio, targetSnrDb: 12.0);
-                float[] codecAudio = AudioAugmenter.ApplyCodecDegradation(audio);
-
-                var agcWindows = SpeechWindowExtractor.ExtractWindows(agcAudio, intervals);
-                var noiseWindows = SpeechWindowExtractor.ExtractWindows(noiseAudio, intervals);
-                var codecWindows = SpeechWindowExtractor.ExtractWindows(codecAudio, intervals);
-
-                windowAudios.AddRange(agcWindows.Select(w => w.AudioSamples));
-                windowAudios.AddRange(noiseWindows.Select(w => w.AudioSamples));
-                windowAudios.AddRange(codecWindows.Select(w => w.AudioSamples));
+                sources.Add(AudioAugmenter.ApplyAgc(audio));
+                sources.Add(AudioAugmenter.ApplyNoiseMix(audio, targetSnrDb: 12.0));
+                sources.Add(AudioAugmenter.ApplyCodecDegradation(audio));
             }
 
-            if (windowAudios.Count > 0)
+            // Windows are materialized one batch at a time so a long clip never holds every window in memory.
+            foreach (var source in sources)
             {
-                var embeddings = _embeddingModel.ExtractEmbeddingsBatch(windowAudios);
-                allEmbeddings.AddRange(embeddings);
+                for (int i = 0; i < plans.Count; i += EmbeddingBatchSize)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    var batch = new List<float[]>(EmbeddingBatchSize);
+                    for (int k = i; k < Math.Min(i + EmbeddingBatchSize, plans.Count); k++)
+                    {
+                        var plan = plans[k];
+                        var windowSource = source.AsSpan((int)plan.SourceStart, plan.SourceLength).ToArray();
+                        batch.Add(SpeechWindowExtractor.Materialize(plan, windowSource).AudioSamples);
+                    }
+                    allEmbeddings.AddRange(_embeddingModel.ExtractEmbeddingsBatch(batch));
+                }
             }
-        }
-
-        if (allEmbeddings.Count == 0)
-        {
-            throw new InvalidOperationException($"No speech windows could be extracted from enrollment audio files for {profileName}.");
-        }
-
-        // Calculate centroid: average of all window embeddings, then L2-normalize
-        int dim = _embeddingModel.EmbeddingDimension;
-        float[] centroid = new float[dim];
-
-        foreach (var emb in allEmbeddings)
-        {
-            for (int d = 0; d < dim; d++)
-            {
-                centroid[d] += emb[d];
-            }
-        }
-
-        float sumSq = 0f;
-        for (int d = 0; d < dim; d++)
-        {
-            centroid[d] /= allEmbeddings.Count;
-            sumSq += centroid[d] * centroid[d];
-        }
-
-        float norm = MathF.Sqrt(sumSq + 1e-12f);
-        for (int d = 0; d < dim; d++)
-        {
-            centroid[d] /= norm;
         }
 
         return new VoiceProfile
         {
             ProfileName = profileName,
             ModelId = _embeddingModel.ModelId,
+            ModelVersion = _embeddingModel.ModelVersion,
             CreatedAt = DateTime.UtcNow.ToString("o"),
-            Centroid = centroid,
+            Centroid = ComputeCentroid(allEmbeddings),
             EnrollmentEmbeddings = allEmbeddings,
             ClipCount = audioFilePaths.Count,
             TotalSpeechDurationSeconds = Math.Round(totalSpeechDuration, 3)
         };
+    }
+
+    /// <summary>L2-normalized mean of unit embeddings: the profile centroid.</summary>
+    public static float[] ComputeCentroid(IReadOnlyList<float[]> embeddings)
+    {
+        if (embeddings.Count == 0)
+        {
+            throw new ArgumentException("At least one embedding is required.", nameof(embeddings));
+        }
+
+        int dim = embeddings[0].Length;
+        double[] sum = new double[dim];
+        foreach (var emb in embeddings)
+        {
+            if (emb.Length != dim)
+            {
+                throw new ArgumentException($"Embeddings differ in dimension ({emb.Length} vs {dim}).", nameof(embeddings));
+            }
+            for (int d = 0; d < dim; d++) sum[d] += emb[d];
+        }
+
+        double norm = Math.Sqrt(sum.Sum(x => x * x));
+        float[] centroid = new float[dim];
+        for (int d = 0; d < dim; d++)
+        {
+            centroid[d] = norm > 1e-12 ? (float)(sum[d] / norm) : 0f;
+        }
+        return centroid;
     }
 }

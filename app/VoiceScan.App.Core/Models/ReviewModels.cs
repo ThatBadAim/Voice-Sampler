@@ -22,9 +22,10 @@ public sealed record ReviewDecisionRecord(
     string? Notes = null,
     float[]? SegmentEmbedding = null);
 
+/// <param name="ProfilePath">Voice profile file the segment was scanned against; confirmed segments can be added to it.</param>
 public sealed record ReviewQueueItem(
     HitSegmentResult Segment,
     string FileName,
     string ProfileName,
     DateTimeOffset DetectedAtUtc,
-    bool AddedToProfile = false);
+    string? ProfilePath = null);

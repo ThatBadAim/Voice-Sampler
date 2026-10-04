@@ -3,6 +3,7 @@ namespace VoiceScan.Core;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
@@ -18,26 +19,59 @@ using VoiceScan.Core.Storage;
 public sealed class PipelineScanner
 {
     public const int DefaultScoreSmoothingRadius = 0;
+    public const string ErrorVerdict = "Error";
+
+    /// <summary>Files decoded ahead while the current one is embedded.</summary>
+    public const int FilePrefetchDepth = 2;
+
+    private const int GpuBatchSize = 64;
+    private const int CpuBatchSize = 16;
 
     private readonly ISpeakerEmbeddingModel _embeddingModel;
-    private readonly SileroVad _vad;
+    private readonly WebRtcVad _vad;
     private readonly VoiceScanDatabase? _database;
     private readonly int _batchSize;
 
     public PipelineScanner(
         ISpeakerEmbeddingModel embeddingModel,
-        SileroVad vad,
+        WebRtcVad vad,
         VoiceScanDatabase? database = null,
-        int batchSize = 16)
+        int? batchSize = null)
     {
         _embeddingModel = embeddingModel ?? throw new ArgumentNullException(nameof(embeddingModel));
         _vad = vad ?? throw new ArgumentNullException(nameof(vad));
         _database = database;
-        _batchSize = Math.Max(1, batchSize);
+        _batchSize = Math.Max(1, batchSize ?? (embeddingModel.IsCudaActive ? GpuBatchSize : CpuBatchSize));
     }
 
+    public static string EngineVersion { get; } = typeof(PipelineScanner).Assembly.GetName().Version?.ToString(3) ?? "0.0.0";
+
     public ISpeakerEmbeddingModel EmbeddingModel => _embeddingModel;
-    public SileroVad Vad => _vad;
+    public WebRtcVad Vad => _vad;
+
+    /// <summary>
+    /// Throws unless <paramref name="profile"/> was enrolled with exactly this model, weights and front-end:
+    /// embeddings from different models (even ones with the same dimension) are not comparable.
+    /// </summary>
+    public void EnsureCompatible(VoiceProfile profile)
+    {
+        if (profile.ModelVersion != _embeddingModel.ModelVersion)
+        {
+            string enrolledWith = string.IsNullOrEmpty(profile.ModelVersion)
+                ? $"an earlier VoiceScan version ({(string.IsNullOrEmpty(profile.ModelId) ? "unknown model" : profile.ModelId)})"
+                : profile.ModelVersion;
+            throw new InvalidOperationException(
+                $"Voice profile '{profile.ProfileName}' was enrolled with {enrolledWith}, but this scan uses {_embeddingModel.ModelVersion}. " +
+                "Enroll the voice again with the current model.");
+        }
+
+        if (profile.Centroid.Length != _embeddingModel.EmbeddingDimension)
+        {
+            throw new InvalidOperationException(
+                $"Voice profile '{profile.ProfileName}' has embedding dimension {profile.Centroid.Length}, but model " +
+                $"'{_embeddingModel.ModelId}' produces {_embeddingModel.EmbeddingDimension}. Enroll the voice again.");
+        }
+    }
 
     /// <summary>
     /// Scans a single media file against the target profile using pipelined execution and embedding caching.
@@ -50,54 +84,54 @@ public sealed class PipelineScanner
         double windowDurationSec = 2.0,
         double hopDurationSec = 1.0,
         double mergeToleranceSec = 1.0,
-        double clusterDistanceThreshold = 0.40,
+        double? clusterDistanceThreshold = null,
         bool enableClustering = true,
         bool enableTemporalSmoothing = true,
         double peakDelta = 0.04,
         double neighborToleranceSec = 2.0,
         ScoreNormalizer? normalizer = null,
         int scoreSmoothingRadius = DefaultScoreSmoothingRadius,
-        CancellationToken cancellationToken = default)
+        Action<double>? reportProgress = null,
+        CancellationToken cancellationToken = default,
+        Func<CancellationToken, Task>? pauseGate = null)
     {
+        double clusterDistance = clusterDistanceThreshold ?? _embeddingModel.OperatingPoint.ClusterDistanceThreshold;
         if (!File.Exists(mediaFilePath))
         {
             throw new FileNotFoundException($"Media file to scan not found: {mediaFilePath}");
         }
 
-        if (targetProfile.Centroid.Length != _embeddingModel.EmbeddingDimension)
-        {
-            throw new InvalidOperationException(
-                $"Voice profile '{targetProfile.ProfileName}' has embedding dimension {targetProfile.Centroid.Length}, " +
-                $"which does not match active model '{_embeddingModel.ModelId}' dimension {_embeddingModel.EmbeddingDimension}. " +
-                $"Please re-enroll the profile with the current model.");
-        }
+        EnsureCompatible(targetProfile);
 
         string fileHash = FastFileHasher.ComputeFastHash(mediaFilePath);
-        string vadSettings = SileroVad.SettingsFingerprint;
-        string windowSettings = $"w:{windowDurationSec:F1}_h:{hopDurationSec:F1}_trk:{audioTrackIndex}_{SpeechWindowExtractor.Fingerprint}_{Filterbank.Fingerprint}";
+        string vadSettings = _vad.SettingsFingerprint;
+        string windowSettings = string.Create(CultureInfo.InvariantCulture,
+            $"w:{windowDurationSec:R}_h:{hopDurationSec:R}_trk:{audioTrackIndex}_{SpeechWindowExtractor.Fingerprint}");
         string cacheKey = string.Empty;
 
         // 1. Check SQLite Embedding Cache
         if (_database != null)
         {
-            cacheKey = VoiceScanDatabase.ComputeCacheKey(fileHash, _embeddingModel.ModelId, vadSettings, windowSettings);
+            cacheKey = VoiceScanDatabase.ComputeCacheKey(fileHash, _embeddingModel.ModelVersion, vadSettings, windowSettings);
 
-            var cachedWindows = await _database.GetCachedWindowsAsync(cacheKey, cancellationToken);
-            if (cachedWindows != null)
+            var cachedScan = await _database.GetCachedScanAsync(cacheKey, cancellationToken);
+            if (cachedScan != null)
             {
+                var cachedWindows = cachedScan.Windows;
+                var cachedInfo = cachedScan.Info;
                 // CACHE HIT: Instant re-scan bypassing decode, VAD, and neural inference
                 var cachedWindowItems = new List<WindowItem>(cachedWindows.Count);
                 for (int i = 0; i < cachedWindows.Count; i++)
                 {
                     var cw = cachedWindows[i];
-                    cachedWindowItems.Add(new WindowItem(i, cw.StartTimeSeconds, cw.EndTimeSeconds, cw.Embedding, cw.SnrDb, cw.SuspectedOverlap));
+                    cachedWindowItems.Add(new WindowItem(i, cw.StartTimeSeconds, cw.EndTimeSeconds, cw.Embedding, cw.SnrDb));
                 }
 
                 var (cachedSegments, cachedMaxConf, cachedVerdict) = ScoreAndAggregate(
                     cachedWindowItems,
                     targetProfile,
                     threshold,
-                    clusterDistanceThreshold,
+                    clusterDistance,
                     mergeToleranceSec,
                     enableClustering,
                     enableTemporalSmoothing,
@@ -106,7 +140,9 @@ public sealed class PipelineScanner
                     normalizer,
                     scoreSmoothingRadius);
 
-                double duration = await AudioDecoder.GetMediaDurationSecondsAsync(mediaFilePath, cancellationToken);
+                double duration = cachedInfo.DurationSeconds > 0.0
+                    ? cachedInfo.DurationSeconds
+                    : await AudioDecoder.GetMediaDurationSecondsAsync(mediaFilePath, cancellationToken);
                 if (duration <= 0.0 && cachedWindows.Count > 0)
                 {
                     duration = cachedWindows[^1].EndTimeSeconds;
@@ -121,7 +157,9 @@ public sealed class PipelineScanner
                     AudioTrackIndex = audioTrackIndex,
                     Verdict = cachedVerdict,
                     MaxConfidence = Math.Round(cachedMaxConf, 4),
-                    Segments = cachedSegments
+                    Segments = cachedSegments,
+                    WaveformMinPeaks = cachedInfo.WaveformMinPeaks,
+                    WaveformMaxPeaks = cachedInfo.WaveformMaxPeaks
                 };
 
                 // Persist scan result to database on cache hit
@@ -132,7 +170,7 @@ public sealed class PipelineScanner
                         cachedResult.FilePath,
                         fileHash,
                         targetProfile.ProfileName,
-                        _embeddingModel.ModelId,
+                        _embeddingModel.ModelVersion,
                         threshold,
                         cachedVerdict,
                         cachedMaxConf,
@@ -140,6 +178,7 @@ public sealed class PipelineScanner
                         cancellationToken);
                 }
 
+                reportProgress?.Invoke(1.0);
                 return cachedResult;
             }
         }
@@ -148,6 +187,22 @@ public sealed class PipelineScanner
         // from the spool. Memory stays bounded by the batch size however long the recording is.
         using var spool = new SpooledAudio();
         var vadStream = _vad.StartProbabilityStream();
+
+        // Decode covers the first half of the file's progress and embedding the second; the decode half
+        // is only reported when ffprobe can tell us the expected length.
+        double expectedSamples = 0.0;
+        if (reportProgress != null)
+        {
+            expectedSamples = await AudioDecoder.GetMediaDurationSecondsAsync(mediaFilePath, cancellationToken) * 16000.0;
+        }
+
+        double lastReported = 0.0;
+        void Report(double fraction)
+        {
+            if (reportProgress == null || fraction - lastReported < 0.005 && fraction < 1.0) return;
+            lastReported = fraction;
+            reportProgress(fraction);
+        }
 
         await foreach (var chunk in AudioDecoder.StreamDecodeAsync(
             mediaFilePath,
@@ -158,26 +213,23 @@ public sealed class PipelineScanner
         {
             spool.Append(chunk.Samples);
             vadStream.Feed(chunk.Samples, chunk.Samples.Length);
+            if (expectedSamples > 0.0) Report(Math.Min(0.5, 0.5 * spool.SampleCount / expectedSamples));
+            if (pauseGate != null) await pauseGate(cancellationToken);
         }
+        Report(0.5);
 
         long totalSamples = spool.SampleCount;
         if (totalSamples == 0)
         {
-            Logging.VoiceScanLogger.Warn("PipelineScanner", $"Zero audio samples decoded from {mediaFilePath}. Returning No match.");
-            return new FileScanResult
-            {
-                FilePath = Path.GetFullPath(mediaFilePath),
-                ClipId = Path.GetFileName(mediaFilePath),
-                DurationSeconds = 0.0,
-                AudioTrackIndex = audioTrackIndex,
-                Verdict = "No match",
-                MaxConfidence = 0.0,
-                Segments = []
-            };
+            Logging.VoiceScanLogger.Warn("PipelineScanner", $"Zero audio samples decoded from {mediaFilePath}.");
+            return CreateErrorResult(
+                mediaFilePath,
+                audioTrackIndex,
+                new InvalidDataException("No audio could be decoded: the file has no audio track (or the selected track is empty) or is corrupt."));
         }
 
         double durationSeconds = (double)totalSamples / 16000.0;
-        var speechIntervals = SileroVad.ProbabilitiesToIntervals(vadStream.Finish(), durationSeconds, 0.5f);
+        var speechIntervals = WebRtcVad.ProbabilitiesToIntervals(vadStream.Finish(), durationSeconds);
         var plans = SpeechWindowExtractor.PlanWindows(
             totalSamples,
             speechIntervals,
@@ -194,6 +246,7 @@ public sealed class PipelineScanner
             for (int i = 0; i < plans.Count; i += _batchSize)
             {
                 cancellationToken.ThrowIfCancellationRequested();
+                if (pauseGate != null) await pauseGate(cancellationToken);
                 int count = Math.Min(_batchSize, plans.Count - i);
                 var batchWindows = Enumerable.Range(i, count)
                     .Select(k => SpeechWindowExtractor.Materialize(
@@ -211,12 +264,15 @@ public sealed class PipelineScanner
                     var win = batchWindows[b];
                     var emb = batchEmbeddings[b];
                     double snrDb = AcousticDiagnostics.EstimateSnrDb(win.AudioSamples);
-                    bool overlap = AcousticDiagnostics.DetectSuspectedOverlap(win.AudioSamples, windowCount: 2);
-                    windowsToCache.Add(new CachedWindow(win.StartTimeSeconds, win.EndTimeSeconds, emb, snrDb, overlap));
-                    windowItems.Add(new WindowItem(windowItems.Count, win.StartTimeSeconds, win.EndTimeSeconds, emb, snrDb, overlap));
+                    windowsToCache.Add(new CachedWindow(win.StartTimeSeconds, win.EndTimeSeconds, emb, snrDb));
+                    windowItems.Add(new WindowItem(windowItems.Count, win.StartTimeSeconds, win.EndTimeSeconds, emb, snrDb));
                 }
+
+                Report(0.5 + 0.5 * (i + count) / plans.Count);
             }
         }
+
+        var (minPeaks, maxPeaks) = spool.Envelope(300);
 
         // 4. Save extracted embeddings to SQLite cache
         if (_database != null && !string.IsNullOrEmpty(cacheKey) && windowsToCache.Count > 0)
@@ -224,18 +280,19 @@ public sealed class PipelineScanner
             await _database.SaveCachedWindowsAsync(
                 cacheKey,
                 fileHash,
-                _embeddingModel.ModelId,
+                _embeddingModel.ModelVersion,
                 vadSettings,
                 windowSettings,
                 windowsToCache,
-                cancellationToken);
+                cancellationToken,
+                new CachedFileInfo(Math.Round(durationSeconds, 3), minPeaks, maxPeaks));
         }
 
         var (segments, maxConfidence, verdict) = ScoreAndAggregate(
             windowItems,
             targetProfile,
             threshold,
-            clusterDistanceThreshold,
+            clusterDistance,
             mergeToleranceSec,
             enableClustering,
             enableTemporalSmoothing,
@@ -243,8 +300,6 @@ public sealed class PipelineScanner
             neighborToleranceSec,
             normalizer,
             scoreSmoothingRadius);
-
-        var (minPeaks, maxPeaks) = spool.Envelope(300);
 
         var result = new FileScanResult
         {
@@ -268,7 +323,7 @@ public sealed class PipelineScanner
                 result.FilePath,
                 fileHash,
                 targetProfile.ProfileName,
-                _embeddingModel.ModelId,
+                _embeddingModel.ModelVersion,
                 threshold,
                 verdict,
                 maxConfidence,
@@ -276,8 +331,20 @@ public sealed class PipelineScanner
                 cancellationToken);
         }
 
+        Report(1.0);
         return result;
     }
+
+    /// <summary>Result recorded for a file that could not be scanned, so it is never mistaken for a clean "No match".</summary>
+    public static FileScanResult CreateErrorResult(string filePath, int audioTrackIndex, Exception ex) => new()
+    {
+        FilePath = Path.GetFullPath(filePath),
+        ClipId = Path.GetFileName(filePath),
+        AudioTrackIndex = audioTrackIndex,
+        Verdict = ErrorVerdict,
+        Error = ex.Message,
+        Segments = []
+    };
 
     /// <summary>
     /// Scores window embeddings using cluster-level scoring (or window-level fallback) and merges hits.
@@ -302,6 +369,8 @@ public sealed class PipelineScanner
 
         double possibleThreshold = Math.Max(0.10, threshold - 0.08);
         var hits = new List<(double Start, double End, double Confidence)>();
+        // Windows that produced a hit; segment diagnostics come only from these, never from other speakers' windows.
+        var hitWindows = new List<WindowItem>();
         double rawMaxConfidence = 0.0;
 
         (double Mean, double StdDev)? targetStats = normalizer != null
@@ -340,6 +409,7 @@ public sealed class PipelineScanner
                 if (sim >= possibleThreshold)
                 {
                     hits.Add((ordered[i].StartTimeSeconds, ordered[i].EndTimeSeconds, sim));
+                    hitWindows.Add(ordered[i]);
                 }
             }
         }
@@ -369,6 +439,7 @@ public sealed class PipelineScanner
                     foreach (var win in cluster.Windows)
                     {
                         hits.Add((win.StartTimeSeconds, win.EndTimeSeconds, clusterScore));
+                        hitWindows.Add(win);
                     }
                 }
             }
@@ -388,10 +459,9 @@ public sealed class PipelineScanner
         {
             double duration = seg.EndTimeSeconds - seg.StartTimeSeconds;
 
-            // Diagnostics and embedding come from the windows covering the segment so cached and fresh scans agree.
-            var covered = windowItems.Where(w => w.EndTimeSeconds > seg.StartTimeSeconds && w.StartTimeSeconds < seg.EndTimeSeconds).ToList();
+            // Diagnostics and embedding come from the hit windows inside the segment (cached and fresh scans agree).
+            var covered = hitWindows.Where(w => w.EndTimeSeconds > seg.StartTimeSeconds && w.StartTimeSeconds < seg.EndTimeSeconds).ToList();
             double snrDb = covered.Count > 0 ? covered.Average(w => w.SnrDb) : 20.0;
-            bool isOverlap = covered.Any(w => w.SuspectedOverlap);
 
             if (covered.Count > 0)
             {
@@ -411,7 +481,7 @@ public sealed class PipelineScanner
                 seg.Embedding = segEmb;
             }
 
-            var reasonFlags = AcousticDiagnostics.EvaluateReasonFlags(duration, snrDb, isOverlap, false);
+            var reasonFlags = AcousticDiagnostics.EvaluateReasonFlags(duration, snrDb, isCodecDegraded: false);
             seg.ReasonFlags = reasonFlags;
 
             if (seg.Confidence >= threshold)
@@ -449,22 +519,17 @@ public sealed class PipelineScanner
             fileVerdict = "No match";
         }
 
-        double finalConfidence;
-        if (fileVerdict == "Match")
-        {
-            finalConfidence = segments.Where(s => s.Verdict == "Match").Max(s => s.Confidence);
-        }
-        else if (fileVerdict == "Possible")
-        {
-            finalConfidence = Math.Min(threshold - 0.001, segments.Max(s => s.Confidence));
-        }
-        else
-        {
-            finalConfidence = Math.Min(rawMaxConfidence, possibleThreshold - 0.001);
-        }
+        // The highest score behind the verdict: the strongest reported segment, or, when temporal support removed
+        // every hit, the strongest raw score so the number is never lower than what was actually measured.
+        double finalConfidence = segments.Count > 0 ? segments.Max(s => s.Confidence) : rawMaxConfidence;
 
         return (segments, finalConfidence, fileVerdict);
     }
+
+    private static readonly string[] MediaExtensions = [".wav", ".flac", ".mp3", ".ogg", ".mp4", ".mkv", ".m4a"];
+
+    private static bool IsMediaFile(string path) =>
+        MediaExtensions.Contains(Path.GetExtension(path), StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
     /// Scans a directory of media files against a voice profile.
@@ -474,7 +539,7 @@ public sealed class PipelineScanner
         VoiceProfile targetProfile,
         double threshold,
         int audioTrackIndex = 0,
-        double clusterDistanceThreshold = 0.40,
+        double? clusterDistanceThreshold = null,
         bool enableClustering = true,
         bool enableTemporalSmoothing = true,
         double peakDelta = 0.04,
@@ -486,17 +551,20 @@ public sealed class PipelineScanner
         CancellationToken cancellationToken = default)
     {
         var stopwatch = Stopwatch.StartNew();
+        double clusterDistance = clusterDistanceThreshold ?? _embeddingModel.OperatingPoint.ClusterDistanceThreshold;
+
+        EnsureCompatible(targetProfile);
+        foreach (var mapped in clipProfileMap?.Values ?? [])
+        {
+            EnsureCompatible(mapped);
+        }
 
         var mediaFiles = new List<string>();
         if (Directory.Exists(inputPath))
         {
-            var searchOpt = recursive ? SearchOption.AllDirectories : SearchOption.TopDirectoryOnly;
-            string[] extensions = { "*.wav", "*.flac", "*.mp3", "*.ogg", "*.mp4", "*.mkv", "*.m4a" };
-            foreach (var ext in extensions)
-            {
-                mediaFiles.AddRange(Directory.GetFiles(inputPath, ext, searchOpt));
-            }
-            mediaFiles.Sort();
+            var options = new EnumerationOptions { RecurseSubdirectories = recursive, IgnoreInaccessible = true };
+            mediaFiles.AddRange(Directory.EnumerateFiles(inputPath, "*", options).Where(IsMediaFile));
+            mediaFiles.Sort(StringComparer.Ordinal);
         }
         else if (File.Exists(inputPath))
         {
@@ -507,26 +575,24 @@ public sealed class PipelineScanner
             throw new FileNotFoundException($"Input media directory or file not found: {inputPath}");
         }
 
-        var results = new List<FileScanResult>();
-        foreach (var file in mediaFiles)
+        async Task<FileScanResult> ScanOne(int _, string file, CancellationToken ct)
         {
             var prof = (clipProfileMap != null && clipProfileMap.TryGetValue(Path.GetFileName(file), out var p)) ? p : targetProfile;
-            FileScanResult res;
             try
             {
-                res = await ScanFileAsync(
+                return await ScanFileAsync(
                     file,
                     prof,
                     threshold,
                     audioTrackIndex: audioTrackIndex,
-                    clusterDistanceThreshold: clusterDistanceThreshold,
+                    clusterDistanceThreshold: clusterDistance,
                     enableClustering: enableClustering,
                     enableTemporalSmoothing: enableTemporalSmoothing,
                     peakDelta: peakDelta,
                     neighborToleranceSec: neighborToleranceSec,
                     normalizer: normalizer,
                     scoreSmoothingRadius: scoreSmoothingRadius,
-                    cancellationToken: cancellationToken);
+                    cancellationToken: ct);
             }
             catch (OperationCanceledException)
             {
@@ -536,17 +602,13 @@ public sealed class PipelineScanner
             catch (Exception ex)
             {
                 Logging.VoiceScanLogger.Error("PipelineScanner", $"Error scanning file {file}", ex);
-                res = new FileScanResult
-                {
-                    FilePath = Path.GetFullPath(file),
-                    ClipId = Path.GetFileName(file),
-                    DurationSeconds = 0.0,
-                    AudioTrackIndex = audioTrackIndex,
-                    Verdict = "No match",
-                    MaxConfidence = 0.0,
-                    Segments = []
-                };
+                return CreateErrorResult(file, audioTrackIndex, ex);
             }
+        }
+
+        var results = new List<FileScanResult>();
+        await foreach (var res in OrderedPrefetch.RunAsync(mediaFiles, FilePrefetchDepth, ScanOne, cancellationToken))
+        {
             results.Add(res);
         }
 
@@ -560,9 +622,13 @@ public sealed class PipelineScanner
                 Timestamp = DateTime.UtcNow.ToString("o"),
                 ProfileName = targetProfile.ProfileName,
                 ModelId = _embeddingModel.ModelId,
-                EngineVersion = "0.1.0",
+                ModelVersion = _embeddingModel.ModelVersion,
+                EngineVersion = EngineVersion,
                 ElapsedSeconds = Math.Round(stopwatch.Elapsed.TotalSeconds, 3),
-                Threshold = Math.Round(threshold, 4)
+                Threshold = Math.Round(threshold, 4),
+                ClusteringEnabled = enableClustering,
+                ClusterThreshold = clusterDistance,
+                TemporalSmoothing = enableTemporalSmoothing
             },
             Files = results
         };

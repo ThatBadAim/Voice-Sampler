@@ -238,7 +238,7 @@ public class StorageCacheTests
             }
 
             using var embeddingModel = new OnnxEmbeddingModel("ecapa");
-            using var vad = new SileroVad();
+            var vad = new WebRtcVad();
             using var db = new VoiceScanDatabase(tempDb);
             await db.InitializeAsync();
 
@@ -246,7 +246,8 @@ public class StorageCacheTests
             var profileA = new VoiceProfile
             {
                 ProfileName = "profile_A",
-                ModelId = "speechbrain-ecapa-tdnn",
+                ModelId = embeddingModel.ModelId,
+                ModelVersion = embeddingModel.ModelVersion,
                 Centroid = new float[192]
             };
             profileA.Centroid[0] = 1.0f;
@@ -254,7 +255,8 @@ public class StorageCacheTests
             var profileB = new VoiceProfile
             {
                 ProfileName = "profile_B",
-                ModelId = "speechbrain-ecapa-tdnn",
+                ModelId = embeddingModel.ModelId,
+                ModelVersion = embeddingModel.ModelVersion,
                 Centroid = new float[192]
             };
             profileB.Centroid[1] = 1.0f;

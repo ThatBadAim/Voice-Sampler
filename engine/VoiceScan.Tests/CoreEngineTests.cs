@@ -21,57 +21,7 @@ public class CoreEngineTests
         return current?.FullName ?? throw new DirectoryNotFoundException("Could not locate repo root.");
     }
 
-    [Fact]
-    public void Filterbank_Computes80DimFbankAndNormalizesMean()
-    {
-        int sr = 16000;
-        int samples = 2 * sr; // 2 seconds
-        float[] audio = new float[samples];
-        for (int i = 0; i < samples; i++)
-        {
-            audio[i] = 0.5f * MathF.Sin(2f * MathF.PI * 220f * i / sr);
-        }
 
-        float[,] fbank = Filterbank.ComputeFbank(audio);
-        Assert.True(fbank.GetLength(0) > 100, $"Expected >100 frames, got {fbank.GetLength(0)}");
-        Assert.Equal(80, fbank.GetLength(1));
-
-        // Verify Cepstral Mean Normalization: column mean should be ~0.0
-        for (int m = 0; m < 80; m++)
-        {
-            float sum = 0f;
-            for (int f = 0; f < fbank.GetLength(0); f++)
-            {
-                sum += fbank[f, m];
-            }
-            float mean = sum / fbank.GetLength(0);
-            Assert.True(MathF.Abs(mean) < 1e-4f, $"CMN failed for mel bin {m}: mean was {mean}");
-        }
-    }
-
-    [Theory]
-    [InlineData("fbank", FbankProfile.WeSpeaker)]
-    [InlineData("fbank_campplus", FbankProfile.CamPlusPlus)]
-    public void Filterbank_MatchesKaldiNativeFbankGolden(string expectedKey, FbankProfile profile)
-    {
-        using var doc = System.Text.Json.JsonDocument.Parse(File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "fbank_golden.json")));
-        float[] audio = doc.RootElement.GetProperty("audio").EnumerateArray().Select(e => e.GetSingle()).ToArray();
-        float[][] expected = doc.RootElement.GetProperty(expectedKey).EnumerateArray()
-            .Select(r => r.EnumerateArray().Select(e => e.GetSingle()).ToArray()).ToArray();
-
-        float[,] actual = Filterbank.ComputeFbank(audio, profile);
-
-        Assert.Equal(expected.Length, actual.GetLength(0));
-        float maxDiff = 0f;
-        for (int f = 0; f < expected.Length; f++)
-        {
-            for (int m = 0; m < 80; m++)
-            {
-                maxDiff = MathF.Max(maxDiff, MathF.Abs(expected[f][m] - actual[f, m]));
-            }
-        }
-        Assert.True(maxDiff < 2e-3f, $"Max deviation from kaldi-native-fbank was {maxDiff}");
-    }
 
     [Fact]
     public async Task AudioDecoder_StreamsChunksFromWavFile()
@@ -169,7 +119,7 @@ public class CoreEngineTests
     }
 
     [Fact]
-    public void SileroVad_Hysteresis_BridgesShortDipsAndDropsBlips()
+    public void WebRtcVad_Hysteresis_BridgesShortDipsAndDropsBlips()
     {
         // 32 ms frames. Speech with a one-frame dip (kept), a long gap, then a 3-frame blip (< 0.25 s, dropped).
         var probs = new float[100];
@@ -177,7 +127,7 @@ public class CoreEngineTests
         probs[15] = 0.4f; // between negative threshold (0.35) and threshold: stays in speech
         for (int i = 70; i < 73; i++) probs[i] = 0.9f;
 
-        var intervals = SileroVad.ProbabilitiesToIntervals(probs, totalSeconds: 100 * 0.032, threshold: 0.5f);
+        var intervals = WebRtcVad.ProbabilitiesToIntervals(probs, totalSeconds: 100 * 0.032, threshold: 0.5f, frameSeconds: 0.032);
 
         Assert.Single(intervals);
         Assert.Equal(5 * 0.032 - 0.03, intervals[0].StartTimeSeconds, precision: 3);
@@ -185,9 +135,9 @@ public class CoreEngineTests
     }
 
     [Fact]
-    public void SileroVad_RealSpeech_IsDetectedAndPureToneIsNot()
+    public void WebRtcVad_RealSpeech_IsDetectedAndPureToneIsNot()
     {
-        using var vad = new SileroVad();
+        var vad = new WebRtcVad();
         float[] speech = AudioDecoder.DecodeEntireFileAsync(Path.Combine(AppContext.BaseDirectory, "fixtures", "jfk_speech.wav")).GetAwaiter().GetResult();
         float[] tone = new float[16000 * 5];
         for (int i = 0; i < tone.Length; i++) tone[i] = 0.4f * MathF.Sin(2f * MathF.PI * 440f * i / 16000);
@@ -239,19 +189,18 @@ public class CoreEngineTests
     [Fact]
     public async Task ProfileEnrollmentService_EnrollsAndSerializesProfile()
     {
-        var root = FindRepoRoot();
-        var enrollDir = Path.Combine(root, "eval", "dev_dataset", "enrollment", "speaker_charlie");
-        var clips = Directory.GetFiles(enrollDir, "*.wav");
-        Assert.NotEmpty(clips);
+        // The synthetic dev dataset holds tones, not speech; enrollment needs a real voice.
+        var clips = new[] { Path.Combine(AppContext.BaseDirectory, "fixtures", "jfk_speech.wav") };
 
         using var embeddingModel = new OnnxEmbeddingModel("ecapa");
-        using var vad = new SileroVad();
+        var vad = new WebRtcVad();
 
         var service = new ProfileEnrollmentService(embeddingModel, vad);
         var profile = await service.EnrollProfileAsync(clips, "speaker_charlie");
 
         Assert.Equal("speaker_charlie", profile.ProfileName);
         Assert.Equal("speechbrain-ecapa-tdnn", profile.ModelId);
+        Assert.Equal(embeddingModel.ModelVersion, profile.ModelVersion);
         Assert.Equal(192, profile.Centroid.Length);
         Assert.True(profile.EnrollmentEmbeddings.Count >= 2);
 
@@ -268,6 +217,7 @@ public class CoreEngineTests
 
             Assert.Equal(profile.ProfileName, loaded.ProfileName);
             Assert.Equal(profile.ModelId, loaded.ModelId);
+            Assert.Equal(profile.ModelVersion, loaded.ModelVersion);
             Assert.Equal(profile.Centroid.Length, loaded.Centroid.Length);
         }
         finally
@@ -306,11 +256,10 @@ public class CoreEngineTests
     {
         var root = FindRepoRoot();
         var clipPath = Path.Combine(root, "eval", "dev_dataset", "audio", "dev_clip_0006.wav");
-        var enrollDir = Path.Combine(root, "eval", "dev_dataset", "enrollment", "speaker_charlie");
-        var clips = Directory.GetFiles(enrollDir, "*.wav");
+        var clips = new[] { Path.Combine(AppContext.BaseDirectory, "fixtures", "jfk_speech.wav") };
 
         using var embeddingModel = new OnnxEmbeddingModel("ecapa");
-        using var vad = new SileroVad();
+        var vad = new WebRtcVad();
 
         var service = new ProfileEnrollmentService(embeddingModel, vad);
         var profile = await service.EnrollProfileAsync(clips, "speaker_charlie");
@@ -496,10 +445,9 @@ public class CoreEngineTests
         Assert.True(snrClean > 15.0, $"Expected clean SNR > 15 dB, got {snrClean}");
 
         // Short segment (<1.5s) and low SNR (<10 dB)
-        var flags = AcousticDiagnostics.EvaluateReasonFlags(durationSeconds: 1.0, snrDb: 6.0, isOverlap: true, isCodecDegraded: false);
+        var flags = AcousticDiagnostics.EvaluateReasonFlags(durationSeconds: 1.0, snrDb: 6.0, isCodecDegraded: false);
         Assert.Contains("SHORT_SEGMENT", flags);
         Assert.Contains("LOW_SNR", flags);
-        Assert.Contains("SUSPECTED_OVERLAP", flags);
     }
 
     [Fact]

@@ -3,6 +3,7 @@ using Avalonia.Controls;
 using Avalonia.Interactivity;
 using Avalonia.Styling;
 using VoiceScan.App.Core.ViewModels;
+using VoiceScan.App.Services;
 
 namespace VoiceScan.App;
 
@@ -12,7 +13,7 @@ public partial class MainWindow : Window
     private readonly Dictionary<AppNavigationPage, Button> _navButtons;
 
     // Needed by the XAML loader / previewer.
-    public MainWindow() : this(AppServiceBootstrap.CreateMainViewModel()) { }
+    public MainWindow() : this(AppServiceBootstrap.CreateMainViewModel(AppServiceBootstrap.LoadEmbeddingModel())) { }
 
     public MainWindow(MainAppViewModel viewModel)
     {
@@ -34,8 +35,20 @@ public partial class MainWindow : Window
             if (e.PropertyName == nameof(MainAppViewModel.IsDarkTheme)) ApplyTheme();
         };
 
+        SizeChanged += (_, e) => ApplyLayout(e.NewSize.Width);
+
         ApplyTheme();
         ShowCurrentPage();
+    }
+
+    private void ApplyLayout(double width)
+    {
+        bool compact = width < ResponsiveLayout.CompactWindowWidth;
+        Classes.Set("compact", compact);
+        Sidebar.Width = compact ? 76 : 264;
+        Sidebar.Padding = compact ? new Thickness(8, 32, 8, 24) : new Thickness(16, 32, 16, 24);
+        Wordmark.IsVisible = !compact;
+        PageHost.Margin = new Thickness(compact ? 24 : 48);
     }
 
     private void ShowCurrentPage()

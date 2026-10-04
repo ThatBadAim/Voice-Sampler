@@ -23,6 +23,13 @@ public interface IAudioPlaybackController : IDisposable
 
 public sealed class AudioPlaybackController : IAudioPlaybackController
 {
+    /// <summary>
+    /// ffplay stops by itself at the end of a segment (-t) or file (-autoexit). The wall clock runs ahead of the audio
+    /// by ffplay's start-up and seek time, so the clock alone must not end playback; this margin only stops a player
+    /// that never exits.
+    /// </summary>
+    private const double StuckPlayerGraceSeconds = 10.0;
+
     private readonly IAudioOutput _output;
     private readonly System.Timers.Timer _playbackTimer;
     private readonly Stopwatch _clock = new();
@@ -150,7 +157,8 @@ public sealed class AudioPlaybackController : IAudioPlaybackController
             if (!_isPlaying) return;
             position = ClampedLivePosition();
             double limit = _stopAtPositionSeconds ?? _totalDurationSeconds;
-            finished = position >= limit || (_session?.HasExited ?? true);
+            double elapsedPastLimit = _positionAtStart + _clock.Elapsed.TotalSeconds - limit;
+            finished = (_session?.HasExited ?? true) || elapsedPastLimit > StuckPlayerGraceSeconds;
             if (finished)
             {
                 position = Math.Min(position, limit);

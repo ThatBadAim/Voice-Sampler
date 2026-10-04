@@ -13,6 +13,7 @@ from __future__ import annotations
 import abc
 import json
 import subprocess
+import tempfile
 import time
 from pathlib import Path
 from typing import Any
@@ -43,7 +44,7 @@ class SubprocessCliScanner(BaseScanner):
 
     def __init__(self, command_prefix: list[str], temp_output_dir: Path | None = None):
         self.command_prefix = command_prefix
-        self.temp_output_dir = temp_output_dir or Path("/tmp")
+        self.temp_output_dir = temp_output_dir or Path(tempfile.gettempdir())
 
     def scan(
         self,
@@ -60,6 +61,9 @@ class SubprocessCliScanner(BaseScanner):
             str(profile_name_or_path),
             "--output",
             str(out_json_path),
+            # Lets the VoiceScan CLI take each clip's target speaker from the dataset's ground_truth.json
+            # and enroll named profiles from its enrollment/ folder; the CLI ignores both without this flag.
+            "--eval-dataset",
         ]
 
         start_time = time.perf_counter()

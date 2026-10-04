@@ -33,7 +33,12 @@ internal sealed class UninstallForm : Form
             "Also delete your saved voices, scan cache and review decisions?\n\nChoose No to keep them in case you reinstall.",
             "VoiceScan uninstall", MessageBoxButtons.YesNo, MessageBoxIcon.Question, MessageBoxDefaultButton.Button2) == DialogResult.Yes;
 
-        InstallActions.Uninstall(dir, deleteData);
+        if (!InstallActions.Uninstall(dir, deleteData))
+        {
+            MessageBox.Show(
+                $"VoiceScan was unregistered, but its folder was left in place because it does not carry the installer's marker:\n\n{dir}\n\nDelete it yourself if it only contains VoiceScan.",
+                "VoiceScan uninstall", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        }
         Close();
     }
 }

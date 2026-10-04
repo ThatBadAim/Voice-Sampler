@@ -22,6 +22,7 @@ public sealed class ResultsViewModel : INotifyPropertyChanged
     private bool _isPlaying;
     private bool _isExporting;
     private string? _exportStatus;
+    private bool _rebuildingList;
 
     public event PropertyChangedEventHandler? PropertyChanged;
 
@@ -80,6 +81,8 @@ public sealed class ResultsViewModel : INotifyPropertyChanged
         get => _selectedFile;
         set
         {
+            // Rebuilding FilteredFiles makes the bound list push a transient null selection; keep the real one.
+            if (_rebuildingList) return;
             if (SetField(ref _selectedFile, value))
             {
                 if (value != null)
@@ -110,8 +113,8 @@ public sealed class ResultsViewModel : INotifyPropertyChanged
         private set => SetField(ref _isPlaying, value);
     }
 
-    /// <summary>Supplies the scan settings recorded in an exported report; set by the owner of the scan options.</summary>
-    public Func<ReportExportSettings>? ExportSettingsProvider { get; set; }
+    /// <summary>Settings of the scan whose results are shown; recorded in exported reports.</summary>
+    public ReportExportSettings? ExportSettings { get; private set; }
 
     public bool HasResults => _allResults.Count > 0;
 
@@ -148,17 +151,21 @@ public sealed class ResultsViewModel : INotifyPropertyChanged
     /// <summary>Writes a CSV, a PDF and the matching audio clips for every scanned file into <paramref name="outputDirectory"/>.</summary>
     public async Task ExportReportAsync(string outputDirectory, CancellationToken cancellationToken = default)
     {
-        if (ExportSettingsProvider is null || _allResults.Count == 0) return;
+        if (ExportSettings is null || _allResults.Count == 0) return;
 
         IsExporting = true;
         ExportStatus = "Exporting report and audio clips...";
         try
         {
             var result = await new EvidenceReportExporter().ExportReportAsync(
-                _allResults.ToList(), ExportSettingsProvider(), outputDirectory, cancellationToken: cancellationToken);
+                _allResults.ToList(), ExportSettings, outputDirectory, cancellationToken: cancellationToken);
             ExportStatus = $"Exported {result.TotalSegmentsExported} hit(s) with {result.ExtractedAudioClipPaths.Count} audio clip(s) to {outputDirectory}.";
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
+        catch (OperationCanceledException)
+        {
+            ExportStatus = "Export cancelled.";
+        }
+        catch (Exception ex)
         {
             ExportStatus = $"Export failed: {ex.Message}";
         }
@@ -166,6 +173,16 @@ public sealed class ResultsViewModel : INotifyPropertyChanged
         {
             IsExporting = false;
         }
+    }
+
+    /// <summary>Starts a new result set for a scan run with <paramref name="settings"/>; earlier results are cleared.</summary>
+    public void BeginScan(ReportExportSettings settings)
+    {
+        ExportSettings = settings;
+        ExportStatus = null;
+        _playbackController.Pause();
+        SetResults([]);
+        SelectedFile = null;
     }
 
     public void SetResults(IEnumerable<FileVerdictResult> results)
@@ -214,6 +231,7 @@ public sealed class ResultsViewModel : INotifyPropertyChanged
             VerdictFilter.Match => query.Where(r => r.OverallVerdict.Equals("Match", StringComparison.OrdinalIgnoreCase)),
             VerdictFilter.Possible => query.Where(r => r.OverallVerdict.Equals("Possible", StringComparison.OrdinalIgnoreCase)),
             VerdictFilter.NoMatch => query.Where(r => r.OverallVerdict.Equals("No match", StringComparison.OrdinalIgnoreCase)),
+            VerdictFilter.Error => query.Where(r => r.IsError),
             _ => query
         };
 
@@ -234,15 +252,27 @@ public sealed class ResultsViewModel : INotifyPropertyChanged
             _ => _sortDescending ? query.OrderByDescending(r => r.MaxConfidence) : query.OrderBy(r => r.MaxConfidence)
         };
 
-        FilteredFiles.Clear();
-        foreach (var item in query)
+        _rebuildingList = true;
+        try
         {
-            FilteredFiles.Add(item);
+            FilteredFiles.Clear();
+            foreach (var item in query)
+            {
+                FilteredFiles.Add(item);
+            }
+        }
+        finally
+        {
+            _rebuildingList = false;
         }
 
         if (SelectedFile != null && !FilteredFiles.Contains(SelectedFile))
         {
             SelectedFile = FilteredFiles.FirstOrDefault();
+        }
+        else
+        {
+            OnPropertyChanged(nameof(SelectedFile)); // re-select the kept item in the rebuilt list
         }
     }
 

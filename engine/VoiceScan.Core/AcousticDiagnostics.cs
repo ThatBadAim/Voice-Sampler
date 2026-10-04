@@ -54,42 +54,11 @@ public static class AcousticDiagnostics
     }
 
     /// <summary>
-    /// Checks for suspected multi-speaker overlap using spectral crest factor and cluster entropy.
-    /// </summary>
-    public static bool DetectSuspectedOverlap(float[] segmentSamples, int windowCount)
-    {
-        if (segmentSamples == null || segmentSamples.Length < 16000) return false;
-
-        // In multi-speaker overlap, peak-to-average power ratio is elevated and zero-crossing density fluctuates rapidly
-        double peak = 0.0;
-        double sumSq = 0.0;
-        int zeroCrossings = 0;
-        for (int i = 0; i < segmentSamples.Length; i++)
-        {
-            double val = Math.Abs(segmentSamples[i]);
-            if (val > peak) peak = val;
-            sumSq += val * val;
-            if (i > 0 && ((segmentSamples[i] >= 0 && segmentSamples[i - 1] < 0) || (segmentSamples[i] < 0 && segmentSamples[i - 1] >= 0)))
-            {
-                zeroCrossings++;
-            }
-        }
-
-        double rms = Math.Sqrt(sumSq / segmentSamples.Length);
-        double crestFactor = rms > 1e-6 ? peak / rms : 0.0;
-        double zcrRate = (double)zeroCrossings / segmentSamples.Length;
-
-        // High crest factor (> 5.5) combined with high zero-crossing rate (> 0.22) and multi-window span indicates overlapping voices
-        return windowCount >= 2 && crestFactor > 5.5 && zcrRate > 0.22;
-    }
-
-    /// <summary>
     /// Generates diagnostic reason flags for a segment.
     /// </summary>
     public static List<string> EvaluateReasonFlags(
         double durationSeconds,
         double snrDb,
-        bool isOverlap,
         bool isCodecDegraded)
     {
         var flags = new List<string>();
@@ -102,11 +71,6 @@ public static class AcousticDiagnostics
         if (snrDb < 10.0)
         {
             flags.Add("LOW_SNR");
-        }
-
-        if (isOverlap)
-        {
-            flags.Add("SUSPECTED_OVERLAP");
         }
 
         if (isCodecDegraded)

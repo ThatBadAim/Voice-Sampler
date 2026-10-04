@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Collections.Specialized;
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
 using VoiceScan.App.Core.Models;
@@ -11,14 +12,13 @@ public sealed class EnrollmentWizardViewModel : INotifyPropertyChanged
 {
     private readonly IAudioQualityAnalyzer _qualityAnalyzer;
     private readonly ProfileEnrollmentService _enrollmentService;
+    private readonly IWaveformService _waveformService;
 
     private EnrollmentStep _currentStep = EnrollmentStep.AudioSelection;
-    private string? _selectedAudioPath;
     private string _profileName = string.Empty;
     private bool _hasConsent;
     private bool _isAnalyzing;
     private bool _isEnrolling;
-    private AudioQualityReport? _qualityReport;
     private string? _statusMessage;
     private VoiceProfileSummary? _createdProfile;
     private VoiceProfileSummary? _selectedProfile;
@@ -32,6 +32,7 @@ public sealed class EnrollmentWizardViewModel : INotifyPropertyChanged
     public event Action? ProfilesChanged;
 
     public ObservableCollection<VoiceProfileSummary> Profiles { get; } = [];
+    public ObservableCollection<EnrollmentSampleItem> SampleFiles { get; } = [];
 
     public bool HasProfiles => Profiles.Count > 0;
 
@@ -55,22 +56,14 @@ public sealed class EnrollmentWizardViewModel : INotifyPropertyChanged
         private set => SetField(ref _currentStep, value);
     }
 
+    /// <summary>Single-sample convenience: the first sample's path; setting it replaces all samples (no quality check is run).</summary>
     public string? SelectedAudioPath
     {
-        get => _selectedAudioPath;
+        get => SampleFiles.FirstOrDefault()?.Path;
         set
         {
-            if (SetField(ref _selectedAudioPath, value))
-            {
-                QualityReport = null;
-                OnPropertyChanged(nameof(CanProceedFromAudioSelection));
-                OnPropertyChanged(nameof(CanProceedFromQuality));
-                OnPropertyChanged(nameof(CanCreateProfile));
-                if (string.IsNullOrWhiteSpace(_profileName) && !string.IsNullOrWhiteSpace(value))
-                {
-                    ProfileName = Path.GetFileNameWithoutExtension(value);
-                }
-            }
+            SampleFiles.Clear();
+            if (!string.IsNullOrWhiteSpace(value)) SampleFiles.Add(new EnrollmentSampleItem(value));
         }
     }
 
@@ -108,13 +101,10 @@ public sealed class EnrollmentWizardViewModel : INotifyPropertyChanged
     public bool IsEnrolling
     {
         get => _isEnrolling;
-        private set => SetField(ref _isEnrolling, value);
-    }
-
-    public AudioQualityReport? QualityReport
-    {
-        get => _qualityReport;
-        private set => SetField(ref _qualityReport, value);
+        private set
+        {
+            if (SetField(ref _isEnrolling, value)) OnPropertyChanged(nameof(CanCreateProfile));
+        }
     }
 
     public string? StatusMessage
@@ -129,15 +119,20 @@ public sealed class EnrollmentWizardViewModel : INotifyPropertyChanged
         private set => SetField(ref _createdProfile, value);
     }
 
-    public bool CanProceedFromAudioSelection => !string.IsNullOrWhiteSpace(_selectedAudioPath) && File.Exists(_selectedAudioPath);
+    public int AcceptedSampleCount => SampleFiles.Count(f => f.IsAccepted);
+    public bool HasSamples => SampleFiles.Count > 0;
+
+    public bool CanProceedFromAudioSelection => SampleFiles.Any(f => File.Exists(f.Path));
     public bool CanProceedFromConsent => _hasConsent;
-    public bool CanProceedFromQuality => _qualityReport?.IsAcceptableForEnrollment == true;
+    public bool CanProceedFromQuality => AcceptedSampleCount > 0;
     public bool CanCreateProfile => !string.IsNullOrWhiteSpace(_profileName) && CanProceedFromConsent && CanProceedFromQuality && !_isEnrolling;
 
-    public EnrollmentWizardViewModel(IAudioQualityAnalyzer qualityAnalyzer, ProfileEnrollmentService enrollmentService)
+    public EnrollmentWizardViewModel(IAudioQualityAnalyzer qualityAnalyzer, ProfileEnrollmentService enrollmentService, IWaveformService? waveformService = null)
     {
         _qualityAnalyzer = qualityAnalyzer;
         _enrollmentService = enrollmentService;
+        _waveformService = waveformService ?? new WaveformService();
+        SampleFiles.CollectionChanged += OnSamplesChanged;
         RefreshProfiles();
     }
 
@@ -162,7 +157,7 @@ public sealed class EnrollmentWizardViewModel : INotifyPropertyChanged
             ProfileLibrary.Delete(profile.Path);
             StatusMessage = $"Deleted voice '{profile.Name}'.";
         }
-        catch (IOException ex)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             StatusMessage = $"Could not delete '{profile.Name}': {ex.Message}";
             return;
@@ -191,35 +186,122 @@ public sealed class EnrollmentWizardViewModel : INotifyPropertyChanged
         StatusMessage = null;
     }
 
-    public async Task RunQualityCheckAsync(CancellationToken cancellationToken = default)
+    private void OnSamplesChanged(object? sender, NotifyCollectionChangedEventArgs e)
     {
-        if (string.IsNullOrWhiteSpace(_selectedAudioPath) || !File.Exists(_selectedAudioPath))
+        foreach (var item in e.NewItems?.OfType<EnrollmentSampleItem>() ?? [])
+        {
+            item.PropertyChanged += OnSampleChanged;
+        }
+
+        foreach (var item in e.OldItems?.OfType<EnrollmentSampleItem>() ?? [])
+        {
+            item.PropertyChanged -= OnSampleChanged;
+        }
+
+        if (string.IsNullOrWhiteSpace(_profileName) && SampleFiles.Count > 0)
+        {
+            ProfileName = Path.GetFileNameWithoutExtension(SampleFiles[0].Path);
+        }
+
+        NotifySamplesChanged();
+    }
+
+    private void OnSampleChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(EnrollmentSampleItem.IsAccepted)) NotifySamplesChanged();
+    }
+
+    private void NotifySamplesChanged()
+    {
+        OnPropertyChanged(nameof(SelectedAudioPath));
+        OnPropertyChanged(nameof(HasSamples));
+        OnPropertyChanged(nameof(AcceptedSampleCount));
+        OnPropertyChanged(nameof(CanProceedFromAudioSelection));
+        OnPropertyChanged(nameof(CanProceedFromQuality));
+        OnPropertyChanged(nameof(CanCreateProfile));
+    }
+
+    /// <summary>Adds files and folders as voice samples (bulk) and quality-checks each new one.</summary>
+    public async Task AddSamplesAsync(IEnumerable<string> paths, CancellationToken cancellationToken = default)
+    {
+        var existing = new HashSet<string>(SampleFiles.Select(f => f.Path));
+        var added = new List<EnrollmentSampleItem>();
+        foreach (var file in MediaFileCollector.Collect(paths))
+        {
+            if (!existing.Add(file)) continue;
+            var item = new EnrollmentSampleItem(file);
+            SampleFiles.Add(item);
+            added.Add(item);
+        }
+
+        if (added.Count == 0)
+        {
+            StatusMessage = "No new audio or video files found in that selection.";
+            return;
+        }
+
+        await RunQualityCheckAsync(added, cancellationToken);
+    }
+
+    public void RemoveSample(EnrollmentSampleItem sample)
+    {
+        if (!_isEnrolling) SampleFiles.Remove(sample);
+    }
+
+    public void ClearSamples()
+    {
+        if (!_isEnrolling) SampleFiles.Clear();
+    }
+
+    public Task ToggleWaveformAsync(MediaFileItem sample) => WaveformPreview.ToggleAsync(sample, _waveformService);
+
+    /// <summary>Checks every sample that has not been checked yet.</summary>
+    public Task RunQualityCheckAsync(CancellationToken cancellationToken = default) =>
+        RunQualityCheckAsync(SampleFiles.Where(f => f.Report is null).ToList(), cancellationToken);
+
+    private async Task RunQualityCheckAsync(IReadOnlyList<EnrollmentSampleItem> samples, CancellationToken cancellationToken)
+    {
+        if (samples.Count == 0)
         {
             StatusMessage = "No valid audio clip found for analysis.";
             return;
         }
 
         IsAnalyzing = true;
-        StatusMessage = "Analyzing speech duration, SNR, and acoustic background noise...";
-
         try
         {
-            QualityReport = await _qualityAnalyzer.AnalyzeAudioAsync(_selectedAudioPath, cancellationToken);
-            OnPropertyChanged(nameof(CanProceedFromQuality));
-            OnPropertyChanged(nameof(CanCreateProfile));
+            for (int i = 0; i < samples.Count; i++)
+            {
+                var sample = samples[i];
+                StatusMessage = $"Checking sample {i + 1} of {samples.Count}: {sample.FileName}";
+                sample.IsAnalyzing = true;
+                sample.AnalysisError = null;
+                try
+                {
+                    // Decoding and analysis are CPU-bound; keep them off the UI thread.
+                    sample.Report = await Task.Run(() => _qualityAnalyzer.AnalyzeAudioAsync(sample.Path, cancellationToken), cancellationToken);
+                }
+                catch (OperationCanceledException)
+                {
+                    throw;
+                }
+                catch (Exception ex)
+                {
+                    sample.AnalysisError = ex.Message;
+                }
+                finally
+                {
+                    sample.IsAnalyzing = false;
+                }
+            }
 
-            if (QualityReport.IsAcceptableForEnrollment)
-            {
-                StatusMessage = "Audio passed acoustic verification.";
-            }
-            else
-            {
-                StatusMessage = "Audio failed minimum quality standards. See feedback details.";
-            }
+            StatusMessage = AcceptedSampleCount > 0
+                ? $"{AcceptedSampleCount} of {SampleFiles.Count} samples passed acoustic verification."
+                : "No sample passed minimum quality standards. See feedback details.";
         }
-        catch (Exception ex)
+        catch (OperationCanceledException)
         {
-            StatusMessage = $"Quality check error: {ex.Message}";
+            StatusMessage = "Quality check cancelled.";
         }
         finally
         {
@@ -229,9 +311,23 @@ public sealed class EnrollmentWizardViewModel : INotifyPropertyChanged
 
     public async Task<VoiceProfileSummary?> CreateProfileAsync(string? outputDir = null, CancellationToken cancellationToken = default)
     {
-        if (!CanCreateProfile || string.IsNullOrWhiteSpace(_selectedAudioPath))
+        var acceptedPaths = SampleFiles.Where(f => f.IsAccepted).Select(f => f.Path).ToList();
+        if (!CanCreateProfile || acceptedPaths.Count == 0)
         {
             StatusMessage = "Cannot create profile: prerequisites not satisfied.";
+            return null;
+        }
+
+        string name = _profileName.Trim();
+        outputDir ??= AppPaths.ProfilesDirectory;
+        string safeName = string.Concat(name.Select(c => Path.GetInvalidFileNameChars().Contains(c) ? '_' : c));
+        string outputPath = Path.Combine(outputDir, $"{safeName}.json");
+        bool nameTaken = ProfileLibrary.List(outputDir).Any(p =>
+            p.Name.Equals(name, StringComparison.OrdinalIgnoreCase)
+            || Path.GetFileName(p.Path).Equals(Path.GetFileName(outputPath), StringComparison.OrdinalIgnoreCase));
+        if (nameTaken || File.Exists(outputPath))
+        {
+            StatusMessage = $"A voice named '{name}' already exists. Choose another name, or delete the existing voice first.";
             return null;
         }
 
@@ -240,16 +336,14 @@ public sealed class EnrollmentWizardViewModel : INotifyPropertyChanged
 
         try
         {
-            outputDir ??= AppPaths.ProfilesDirectory;
             Directory.CreateDirectory(outputDir);
-            string safeName = string.Concat(_profileName.Trim().Select(c => Path.GetInvalidFileNameChars().Contains(c) ? '_' : c));
-            string outputPath = Path.Combine(outputDir, $"{safeName}.json");
 
-            var profile = await _enrollmentService.EnrollProfileAsync(
-                audioFilePaths: [_selectedAudioPath],
-                profileName: _profileName,
+            // Decoding, voice detection and embedding inference are CPU/GPU-bound; keep them off the UI thread.
+            var profile = await Task.Run(() => _enrollmentService.EnrollProfileAsync(
+                audioFilePaths: acceptedPaths,
+                profileName: name,
                 multiCondition: false,
-                cancellationToken: cancellationToken);
+                cancellationToken: cancellationToken), cancellationToken);
 
             profile.SaveToFile(outputPath);
 
@@ -280,10 +374,9 @@ public sealed class EnrollmentWizardViewModel : INotifyPropertyChanged
     public void Reset()
     {
         CurrentStep = EnrollmentStep.AudioSelection;
-        SelectedAudioPath = null;
+        SampleFiles.Clear();
         ProfileName = string.Empty;
         HasConsent = false;
-        QualityReport = null;
         CreatedProfile = null;
         StatusMessage = null;
     }

@@ -10,13 +10,15 @@ namespace VoiceScan.App.Core.ViewModels;
 public sealed class ScanDashboardViewModel : INotifyPropertyChanged
 {
     private readonly IBackgroundScanController _scanController;
+    private readonly IWaveformService _waveformService;
+    private readonly UserSettingsStore? _settings;
 
-    private string? _selectedTargetFolderPath;
     private string? _selectedProfilePath;
     private VoiceProfileSummary? _selectedProfile;
     private bool _useClustering = true;
     private bool _useTemporalSmoothing = true;
-    private double _clusterThreshold = 0.40;
+    private double? _clusterThreshold;
+    private ReportExportSettings? _pendingScan;
     private OverallScanProgress _progress;
     private string? _statusMessage;
     private bool _isScanning;
@@ -24,12 +26,15 @@ public sealed class ScanDashboardViewModel : INotifyPropertyChanged
 
     public event PropertyChangedEventHandler? PropertyChanged;
 
-    public ObservableCollection<string> TargetFiles { get; } = [];
+    public ObservableCollection<MediaFileItem> TargetFiles { get; } = [];
     public ObservableCollection<FileVerdictResult> CompletedFiles { get; } = [];
     public ObservableCollection<VoiceProfileSummary> Profiles { get; } = [];
 
     /// <summary>Raised on the UI context when a scan ends in the Completed state.</summary>
     public event Action? ScanFinished;
+
+    /// <summary>Raised on the UI context when a scan starts, with the settings it actually runs with.</summary>
+    public event Action<ReportExportSettings>? ScanStarted;
 
     public bool HasProfiles => Profiles.Count > 0;
 
@@ -45,19 +50,6 @@ public sealed class ScanDashboardViewModel : INotifyPropertyChanged
         }
     }
 
-    public string? SelectedTargetFolderPath
-    {
-        get => _selectedTargetFolderPath;
-        set
-        {
-            if (SetField(ref _selectedTargetFolderPath, value))
-            {
-                LoadFilesFromFolder(value);
-                OnPropertyChanged(nameof(CanStartScan));
-            }
-        }
-    }
-
     public string? SelectedProfilePath
     {
         get => _selectedProfilePath;
@@ -66,6 +58,11 @@ public sealed class ScanDashboardViewModel : INotifyPropertyChanged
             if (SetField(ref _selectedProfilePath, value))
             {
                 OnPropertyChanged(nameof(CanStartScan));
+                if (_settings is not null && value is not null)
+                {
+                    _settings.Current.LastProfilePath = value;
+                    _settings.Save();
+                }
             }
         }
     }
@@ -73,26 +70,69 @@ public sealed class ScanDashboardViewModel : INotifyPropertyChanged
     public bool UseClustering
     {
         get => _useClustering;
-        set => SetField(ref _useClustering, value);
+        set
+        {
+            if (!SetField(ref _useClustering, value) || _settings is null) return;
+            _settings.Current.UseClustering = value;
+            _settings.Save();
+        }
     }
 
     public bool UseTemporalSmoothing
     {
         get => _useTemporalSmoothing;
-        set => SetField(ref _useTemporalSmoothing, value);
+        set
+        {
+            if (!SetField(ref _useTemporalSmoothing, value) || _settings is null) return;
+            _settings.Current.UseTemporalSmoothing = value;
+            _settings.Save();
+        }
     }
 
+    /// <summary>AHC stopping distance; the loaded model's measured default until the user chooses one.</summary>
     public double ClusterThreshold
     {
-        get => _clusterThreshold;
-        set => SetField(ref _clusterThreshold, value);
+        get => _clusterThreshold ?? _scanController.OperatingPoint.ClusterDistanceThreshold;
+        set
+        {
+            if (_clusterThreshold == value) return;
+            _clusterThreshold = value;
+            OnPropertyChanged();
+            if (_settings is null) return;
+            _settings.Current.ClusterThreshold = value;
+            _settings.Save();
+        }
+    }
+
+    /// <summary>Folder the file pickers should open in; the parent of the last file or folder added.</summary>
+    public string? LastBrowseFolder
+    {
+        get => _settings?.Current.LastBrowseFolder;
+        set
+        {
+            if (_settings is null || _settings.Current.LastBrowseFolder == value) return;
+            _settings.Current.LastBrowseFolder = value;
+            _settings.Save();
+        }
     }
 
     public OverallScanProgress Progress
     {
         get => _progress;
-        private set => SetField(ref _progress, value);
+        private set
+        {
+            if (SetField(ref _progress, value))
+            {
+                OnPropertyChanged(nameof(HasErrors));
+                OnPropertyChanged(nameof(EstimatedTimeRemainingText));
+            }
+        }
     }
+
+    public string EstimatedTimeRemainingText =>
+        Progress.EstimatedTimeRemaining is { } eta ? TimeFormat.Clock(eta.TotalSeconds) : "--:--";
+
+    public bool HasErrors => Progress.TotalErrors > 0;
 
     public bool IsScanning
     {
@@ -104,9 +144,12 @@ public sealed class ScanDashboardViewModel : INotifyPropertyChanged
                 OnPropertyChanged(nameof(CanStartScan));
                 OnPropertyChanged(nameof(CanCancelScan));
                 OnPropertyChanged(nameof(CanPauseScan));
+                OnPropertyChanged(nameof(CanEditFiles));
             }
         }
     }
+
+    public bool CanEditFiles => !IsScanning;
 
     public bool IsPaused
     {
@@ -132,9 +175,22 @@ public sealed class ScanDashboardViewModel : INotifyPropertyChanged
     public bool CanPauseScan => IsScanning && !IsPaused;
     public bool CanResumeScan => IsScanning && IsPaused;
 
-    public ScanDashboardViewModel(IBackgroundScanController scanController)
+    public ScanDashboardViewModel(
+        IBackgroundScanController scanController,
+        IWaveformService? waveformService = null,
+        UserSettingsStore? settings = null)
     {
         _scanController = scanController;
+        _waveformService = waveformService ?? new WaveformService();
+        _settings = settings;
+        if (settings is not null)
+        {
+            _useClustering = settings.Current.UseClustering;
+            _useTemporalSmoothing = settings.Current.UseTemporalSmoothing;
+            _clusterThreshold = settings.Current.ClusterThreshold;
+            _selectedProfilePath = settings.Current.LastProfilePath;
+        }
+        TargetFiles.CollectionChanged += (_, _) => OnPropertyChanged(nameof(CanStartScan));
         RefreshProfiles();
         _progress = _scanController.CurrentProgress;
 
@@ -161,18 +217,34 @@ public sealed class ScanDashboardViewModel : INotifyPropertyChanged
             IsScanning = state == ScanExecutionState.Scanning || state == ScanExecutionState.Paused;
             IsPaused = state == ScanExecutionState.Paused;
 
+            if (state == ScanExecutionState.Scanning && _pendingScan is { } started)
+            {
+                _pendingScan = null;
+                ScanStarted?.Invoke(started);
+            }
+
             StatusMessage = state switch
             {
                 ScanExecutionState.Scanning => "Scan in progress...",
                 ScanExecutionState.Paused => "Scan paused.",
-                ScanExecutionState.Completed => $"Scan completed. Processed {CompletedFiles.Count} files.",
-                ScanExecutionState.Cancelled => "Scan cancelled by user.",
-                ScanExecutionState.Failed => "Scan encountered an error.",
+                ScanExecutionState.Completed => CompletionMessage(),
+                ScanExecutionState.Cancelled => CompletedFiles.Count > 0
+                    ? $"Scan cancelled. {CompletedFiles.Count} finished file{(CompletedFiles.Count == 1 ? "" : "s")} kept in Results."
+                    : "Scan cancelled.",
+                ScanExecutionState.Failed => "Scan stopped because of an error. Details are in the log.",
                 _ => null
             };
 
             if (state == ScanExecutionState.Completed) ScanFinished?.Invoke();
         });
+    }
+
+    private string CompletionMessage()
+    {
+        int failed = CompletedFiles.Count(f => f.IsError);
+        return failed == 0
+            ? $"Scan completed. Processed {CompletedFiles.Count} files."
+            : $"Scan completed. {failed} of {CompletedFiles.Count} files could not be scanned; see Results for the reasons.";
     }
 
     /// <summary>Reloads saved profiles; keeps the current choice, or selects <paramref name="selectPath"/> when given.</summary>
@@ -189,24 +261,37 @@ public sealed class ScanDashboardViewModel : INotifyPropertyChanged
         SelectedProfile = Profiles.FirstOrDefault(p => p.Path == selectPath) ?? Profiles.FirstOrDefault();
     }
 
-    public void LoadFilesFromFolder(string? folderPath)
+    /// <summary>Adds files and folders (searched recursively); returns how many new media files were added.</summary>
+    public int AddPaths(IEnumerable<string> paths)
     {
-        TargetFiles.Clear();
-        if (string.IsNullOrWhiteSpace(folderPath) || !Directory.Exists(folderPath)) return;
-
-        string[] extensions = [".wav", ".mp3", ".flac", ".ogg", ".mp4", ".mkv", ".m4a"];
-        var files = Directory.EnumerateFiles(folderPath, "*.*", SearchOption.AllDirectories)
-            .Where(f => extensions.Contains(Path.GetExtension(f).ToLowerInvariant()))
-            .OrderBy(f => f);
-
-        foreach (var file in files)
+        var existing = new HashSet<string>(TargetFiles.Select(f => f.Path));
+        int added = 0;
+        foreach (var file in MediaFileCollector.Collect(paths))
         {
-            TargetFiles.Add(file);
+            if (!existing.Add(file)) continue;
+            TargetFiles.Add(new MediaFileItem(file));
+            added++;
         }
 
-        StatusMessage = $"Loaded {TargetFiles.Count} media files from {Path.GetFileName(folderPath)}.";
-        OnPropertyChanged(nameof(CanStartScan));
+        StatusMessage = added == 0
+            ? "No new audio or video files found in that selection."
+            : $"Added {added} file{(added == 1 ? "" : "s")}. {TargetFiles.Count} queued for scanning.";
+        return added;
     }
+
+    public void RemoveFile(MediaFileItem file)
+    {
+        if (!IsScanning) TargetFiles.Remove(file);
+    }
+
+    public void ClearFiles()
+    {
+        if (IsScanning) return;
+        TargetFiles.Clear();
+        StatusMessage = null;
+    }
+
+    public Task ToggleWaveformAsync(MediaFileItem file) => WaveformPreview.ToggleAsync(file, _waveformService);
 
     public async Task StartScanAsync(CancellationToken cancellationToken = default)
     {
@@ -220,27 +305,47 @@ public sealed class ScanDashboardViewModel : INotifyPropertyChanged
             TemporalSmoothing: _useTemporalSmoothing,
             UseClustering: _useClustering);
 
+        _pendingScan = new ReportExportSettings(
+            ProfileName: SelectedProfile?.Name ?? Path.GetFileNameWithoutExtension(_selectedProfilePath),
+            ModelId: _scanController.ModelId,
+            EngineVersion: PipelineScanner.EngineVersion,
+            Threshold: _scanController.OperatingPoint.Threshold,
+            ClusterThreshold: ClusterThreshold,
+            TemporalSmoothing: _useTemporalSmoothing,
+            ScanDateUtc: DateTimeOffset.UtcNow,
+            ClusteringEnabled: _useClustering);
+
         try
         {
             await _scanController.StartScanAsync(
-                TargetFiles.ToList(),
+                TargetFiles.Select(f => f.Path).ToList(),
                 _selectedProfilePath,
                 options,
                 cancellationToken);
         }
         catch (OperationCanceledException)
         {
-            StatusMessage = "Scan was cancelled.";
+            // StateChanged already reported the cancellation.
         }
         catch (Exception ex)
         {
-            StatusMessage = $"Scan error: {ex.Message}";
+            StatusMessage = $"Scan stopped: {ex.Message}";
+        }
+        finally
+        {
+            _pendingScan = null;
         }
     }
 
     public void PauseScan() => _scanController.Pause();
     public void ResumeScan() => _scanController.Resume();
-    public void CancelScan() => _scanController.Cancel();
+
+    public void CancelScan()
+    {
+        if (!IsScanning) return;
+        StatusMessage = "Cancelling… files in progress stop at the next safe point.";
+        _scanController.Cancel();
+    }
 
     private bool SetField<T>(ref T field, T value, [CallerMemberName] string? propertyName = null)
     {

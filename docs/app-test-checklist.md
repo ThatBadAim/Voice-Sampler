@@ -22,7 +22,7 @@ The VoiceScan desktop application provides an intuitive, high-performance interf
 | **Scan** | Control Signals | Instant Pause, Resume, and Cancel without deadlock or file corruption. | **PASS** |
 | **Results** | Verdict Badges | Clear pills for `Match`, `Possible`, and `No match`; sortable and filterable. | **PASS** |
 | **Results** | Waveform Timeline | Amplitude envelope rendering; highlighted hit segment overlays; click-to-seek cursor. | **PASS** |
-| **Results** | Reason Flags & Playback | Segment confidence display with `LOW_SNR`, `SHORT_SEGMENT`, `SUSPECTED_OVERLAP`; click-to-play at hit. | **PASS** |
+| **Results** | Reason Flags & Playback | Segment confidence display with `LOW_SNR`, `SHORT_SEGMENT`; click-to-play at hit. | **PASS** |
 | **Review** | Triage Queue | Filter borderline `Possible` hits into review queue. | **PASS** |
 | **Review** | SQLite Persistence | Confirm hits (augments profile centroid) or Reject (stores labeled negatives in SQLite). | **PASS** |
 | **Endurance** | 5-Hour Folder Scan | Continuous scan on 18,000s of audio on background thread; UI dispatcher heartbeat jitter $< 15\text{ms}$. | **PASS** |
@@ -36,7 +36,7 @@ The VoiceScan desktop application provides an intuitive, high-performance interf
 
 - **Workflow:**
   1. Operator chooses reference audio or records directly from microphone.
-  2. The acoustic diagnostic engine inspects speech energy and noise floor using Silero VAD and SNR estimation. Clear plain feedback is displayed (e.g. *"Pristine acoustic clarity (SNR 22.4 dB)"*).
+  2. The acoustic diagnostic engine inspects speech energy and noise floor using the WebRTC VAD and SNR estimation. Clear plain feedback is displayed (e.g. *"Pristine acoustic clarity (SNR 22.4 dB)"*).
   3. **Mandatory Consent Checkbox:** The UI enforces strict consent compliance with legal disclaimer. The *"Generate & Save Voice Profile"* action remains strictly disabled until checked.
   4. Generates a named voice profile with optional multi-condition augmentation (Opus codec simulation, AGC dynamics, background game noise).
 
@@ -63,7 +63,7 @@ The VoiceScan desktop application provides an intuitive, high-performance interf
   2. Selecting a file loads its multi-resolution waveform envelope into `WaveformTimelineControl`.
   3. Hit segments are highlighted directly on the waveform with color-coded brushes (Green for `Match`, Orange for `Possible`).
   4. A scrubbable vertical playback cursor line tracks playback progress with click-to-seek support.
-  5. The segment table shows exact interval timestamps, calibrated confidence scores, and diagnostic reason flags (`LOW_SNR`, `SHORT_SEGMENT`, `SUSPECTED_OVERLAP`).
+  5. The segment table shows exact interval timestamps, calibrated confidence scores, and diagnostic reason flags (`LOW_SNR`, `SHORT_SEGMENT`).
 
 ---
 

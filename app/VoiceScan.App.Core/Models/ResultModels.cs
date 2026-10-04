@@ -7,7 +7,8 @@ public enum VerdictFilter
     All,
     Match,
     Possible,
-    NoMatch
+    NoMatch,
+    Error
 }
 
 public enum ResultSortColumn
@@ -36,7 +37,20 @@ public sealed record HitSegmentResult(
     IReadOnlyList<string> ReasonFlags,
     ReviewDecision Decision = ReviewDecision.Unreviewed,
     float[]? SegmentEmbedding = null,
-    string? FileHash = null);
+    string? FileHash = null)
+{
+    /// <summary>
+    /// Stable id that stays unique across files that share a name: the content hash (or, failing that, the full
+    /// path) is part of it.
+    /// </summary>
+    public static string CreateId(string filePath, string? fileHash, int index, double startTimeSeconds)
+    {
+        string source = string.IsNullOrEmpty(fileHash) ? Path.GetFullPath(filePath) : fileHash;
+        string tag = Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(source)))[..8];
+        return string.Create(System.Globalization.CultureInfo.InvariantCulture,
+            $"{Path.GetFileNameWithoutExtension(filePath)}_{tag}_{index}_{startTimeSeconds:F1}");
+    }
+}
 
 public sealed record FileVerdictResult(
     string FilePath,
@@ -46,4 +60,11 @@ public sealed record FileVerdictResult(
     string OverallVerdict,
     double MaxConfidence,
     IReadOnlyList<HitSegmentResult> Segments,
-    WaveformEnvelope? Waveform = null);
+    WaveformEnvelope? Waveform = null,
+    string? ErrorMessage = null,
+    int AudioTrackIndex = 0,
+    string? ProfileName = null,
+    string? ProfilePath = null)
+{
+    public bool IsError => OverallVerdict.Equals(PipelineScanner.ErrorVerdict, StringComparison.OrdinalIgnoreCase);
+}

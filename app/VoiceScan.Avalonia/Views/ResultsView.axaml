@@ -7,13 +7,13 @@
              x:Class="VoiceScan.App.Views.ResultsView"
              x:DataType="vm:ResultsViewModel">
 
-    <Grid ColumnDefinitions="360,20,*">
-        <Border Classes="card" Padding="12">
+    <Grid x:Name="Split" ColumnDefinitions="360,40,*">
+        <Border x:Name="ListPane" Classes="panel">
             <DockPanel>
-                <StackPanel DockPanel.Dock="Top" Spacing="8" Margin="0,0,0,8">
+                <StackPanel DockPanel.Dock="Top" Spacing="12" Margin="0,0,0,20">
                     <TextBlock Text="Results" Classes="heading" />
                     <TextBox Text="{Binding SearchQuery}" PlaceholderText="Search files…" />
-                    <Grid ColumnDefinitions="*,*" ColumnSpacing="8">
+                    <Grid ColumnDefinitions="*,*" ColumnSpacing="12">
                         <ComboBox x:Name="FilterCombo" HorizontalAlignment="Stretch" SelectedItem="{Binding SelectedFilter}" />
                         <ComboBox x:Name="SortCombo" Grid.Column="1" HorizontalAlignment="Stretch" SelectedItem="{Binding SelectedSort}" />
                     </Grid>
@@ -26,14 +26,16 @@
                 <ListBox ItemsSource="{Binding FilteredFiles}" SelectedItem="{Binding SelectedFile}">
                     <ListBox.ItemTemplate>
                         <DataTemplate x:DataType="m:FileVerdictResult">
-                            <StackPanel Spacing="2">
+                            <StackPanel Spacing="6">
                                 <TextBlock Text="{Binding FileName}" TextTrimming="CharacterEllipsis" />
-                                <StackPanel Orientation="Horizontal" Spacing="8">
+                                <StackPanel Orientation="Horizontal" Spacing="12">
                                     <Border Classes="badge" Background="{Binding OverallVerdict, Converter={x:Static svc:VerdictConverters.Background}}">
                                         <TextBlock Text="{Binding OverallVerdict}" Foreground="{Binding OverallVerdict, Converter={x:Static svc:VerdictConverters.Foreground}}" />
                                     </Border>
-                                    <TextBlock Text="{Binding MaxConfidence, StringFormat={}{0:P0}}" Classes="secondary" />
+                                    <TextBlock Text="{Binding MaxConfidence, StringFormat={}{0:P0}}" Classes="secondary" IsVisible="{Binding !IsError}" />
                                 </StackPanel>
+                                <TextBlock Text="{Binding ErrorMessage}" IsVisible="{Binding IsError}" TextWrapping="Wrap"
+                                           Foreground="{DynamicResource VerdictErrorBrush}" FontSize="12" />
                             </StackPanel>
                         </DataTemplate>
                     </ListBox.ItemTemplate>
@@ -41,21 +43,23 @@
             </DockPanel>
         </Border>
 
-        <Border Grid.Column="2" Classes="card" IsVisible="{Binding HasSelectedFile}">
+        <Border x:Name="DetailPane" Grid.Column="2" Classes="panel" IsVisible="{Binding HasSelectedFile}">
             <DockPanel>
-                <StackPanel DockPanel.Dock="Top" Spacing="4" Margin="0,0,0,12">
+                <StackPanel DockPanel.Dock="Top" Spacing="8" Margin="0,0,0,24">
                     <TextBlock Text="{Binding SelectedFile.FileName}" Classes="title" FontSize="20" TextTrimming="CharacterEllipsis" />
                     <TextBlock Text="{Binding SelectedFile.FilePath}" Classes="secondary" TextTrimming="CharacterEllipsis" />
                     <Border HorizontalAlignment="Left" Classes="badge" Background="{Binding SelectedFile.OverallVerdict, Converter={x:Static svc:VerdictConverters.Background}}"><TextBlock Text="{Binding SelectedFile.OverallVerdict}" Foreground="{Binding SelectedFile.OverallVerdict, Converter={x:Static svc:VerdictConverters.Foreground}}" /></Border>
+                    <TextBlock Text="{Binding SelectedFile.ErrorMessage}" IsVisible="{Binding SelectedFile.IsError}" TextWrapping="Wrap"
+                               Foreground="{DynamicResource VerdictErrorBrush}" />
                 </StackPanel>
 
-                <StackPanel DockPanel.Dock="Top" Spacing="8" Margin="0,0,0,12">
+                <StackPanel DockPanel.Dock="Top" Spacing="12" Margin="0,0,0,24">
                     <c:WaveformTimelineControl x:Name="Timeline" />
                     <StackPanel Orientation="Horizontal" Spacing="12">
-                        <Button x:Name="PlayPauseButton" Classes="accent" Click="PlayPause_Click"
+                        <Button x:Name="PlayPauseButton" Classes="primary" Click="PlayPause_Click"
                                 IsEnabled="{Binding IsAudioAvailable}"
                                 ToolTip.Tip="Audio playback needs ffplay (install ffmpeg) on PATH.">
-                            <StackPanel Orientation="Horizontal" Spacing="8">
+                            <StackPanel Orientation="Horizontal" Spacing="12">
                                 <PathIcon x:Name="PlayPauseIcon" Data="{StaticResource IconPlay}" />
                                 <TextBlock x:Name="PlayPauseText" Text="Play" />
                             </StackPanel>
@@ -79,7 +83,7 @@
             </DockPanel>
         </Border>
 
-        <TextBlock Grid.Column="2" Text="Scan some recordings, then select a file to see where the voice appears." Classes="subtitle"
+        <TextBlock x:Name="EmptyText" Grid.Column="2" Text="Scan some recordings, then select a file to see where the voice appears." Classes="subtitle"
                    IsVisible="{Binding !HasSelectedFile}" HorizontalAlignment="Center" VerticalAlignment="Center" />
     </Grid>
 </UserControl>

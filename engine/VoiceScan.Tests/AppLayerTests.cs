@@ -6,6 +6,7 @@ using VoiceScan.Core;
 
 namespace VoiceScan.Tests;
 
+[Collection("GlobalLogger")]
 public class AppLayerTests : IDisposable
 {
     private readonly string _testDbPath;
@@ -31,19 +32,9 @@ public class AppLayerTests : IDisposable
     {
         var analyzer = new AudioQualityAnalyzer();
 
-        // 1. Synthetic clean speech buffer (10 seconds, 16kHz, high SNR)
+        // 1. Real recorded speech (11 s); a synthetic tone is not speech and must not pass the voice detector.
         int sampleRate = 16000;
-        int durationSec = 10;
-        float[] cleanSpeech = new float[durationSec * sampleRate];
-        for (int i = 0; i < cleanSpeech.Length; i++)
-        {
-            // Modulated voice signal with pauses
-            double env = Math.Sin(2 * Math.PI * 0.5 * i / sampleRate);
-            if (env > 0)
-            {
-                cleanSpeech[i] = (float)(0.4 * env * Math.Sin(2 * Math.PI * 220.0 * i / sampleRate));
-            }
-        }
+        float[] cleanSpeech = AudioDecoder.DecodeEntireFileAsync(Path.Combine(AppContext.BaseDirectory, "fixtures", "jfk_speech.wav")).GetAwaiter().GetResult();
 
         var report = analyzer.AnalyzePcm(cleanSpeech, sampleRate);
         Assert.NotNull(report);
@@ -69,7 +60,7 @@ public class AppLayerTests : IDisposable
     public void EnrollmentWizard_StrictMandatoryConsent_GateEnforced()
     {
         var analyzer = new AudioQualityAnalyzer();
-        var vad = new SileroVad();
+        var vad = new WebRtcVad();
         var model = new OnnxEmbeddingModel();
         var enrollmentService = new ProfileEnrollmentService(model, vad);
         var vm = new EnrollmentWizardViewModel(analyzer, enrollmentService);
@@ -148,10 +139,12 @@ public class AppLayerTests : IDisposable
 
         // Test Profile Augmentation
         string tempProfilePath = Path.Combine(Path.GetTempPath(), $"test_profile_{Guid.NewGuid():N}.json");
+        var enrolled = Enumerable.Range(0, 512).Select(i => i % 2 == 0 ? 0.0625f : 0f).ToArray();
         var baseProfile = new VoiceProfile
         {
             ProfileName = "TargetAlice",
-            Centroid = Enumerable.Repeat(0.04419f, 512).ToArray(),
+            Centroid = enrolled,
+            EnrollmentEmbeddings = [enrolled, enrolled, enrolled],
             ClipCount = 1,
             TotalSpeechDurationSeconds = 10.0
         };
@@ -164,6 +157,9 @@ public class AppLayerTests : IDisposable
         Assert.Equal(2, reloaded.ClipCount);
         Assert.True(reloaded.TotalSpeechDurationSeconds > 10.0);
         Assert.Equal(512, reloaded.Centroid.Length);
+        Assert.Equal(4, reloaded.EnrollmentEmbeddings.Count);
+        // The confirmed segment counts as one embedding among four, not as half the profile.
+        Assert.Equal(ProfileEnrollmentService.ComputeCentroid(reloaded.EnrollmentEmbeddings), reloaded.Centroid);
 
         if (File.Exists(tempProfilePath)) File.Delete(tempProfilePath);
     }
@@ -271,7 +267,7 @@ public class AppLayerTests : IDisposable
     {
         var args = FfplayAudioOutput.BuildArguments("/media/a b.mp4", 12.5, 3.0);
 
-        Assert.Equal(["-nodisp", "-autoexit", "-loglevel", "quiet", "-vn", "-ss", "12.500", "-t", "3.000", "/media/a b.mp4"], args);
+        Assert.Equal(["-nodisp", "-autoexit", "-loglevel", "quiet", "-vn", "-protocol_whitelist", "file,pipe", "-ss", "12.500", "-t", "3.000", "/media/a b.mp4"], args);
         Assert.DoesNotContain("-t", FfplayAudioOutput.BuildArguments("x.wav", 0.0, null));
     }
 
@@ -449,7 +445,7 @@ public class AppLayerTests : IDisposable
 
             Assert.True(File.Exists(result.CsvPath));
             string csvContent = await File.ReadAllTextAsync(result.CsvPath);
-            Assert.Contains("file_path,file_name,file_hash,file_duration_seconds,file_verdict,segment_id,start_time_seconds,end_time_seconds,duration_seconds,verdict,confidence,reason_flags,profile_name,model_id,engine_version,settings_snapshot,scan_date_utc,audio_clip_path", csvContent);
+            Assert.Contains("file_path,file_name,file_hash,file_duration_seconds,file_verdict,file_max_confidence,error_message,segment_id,start_time_seconds,end_time_seconds,duration_seconds,verdict,confidence,reason_flags,profile_name,model_id,engine_version,settings_snapshot,scan_date_utc,audio_track_index,audio_clip_path", csvContent);
             Assert.Contains("TargetPlayer", csvContent);
             Assert.Contains("Match", csvContent);
 
@@ -501,7 +497,7 @@ public class AppLayerTests : IDisposable
     [Fact]
     public void EnrollmentWizard_DeleteSelectedProfile_RemovesFileAndRaisesEvent()
     {
-        var vm = new EnrollmentWizardViewModel(new AudioQualityAnalyzer(), new ProfileEnrollmentService(new OnnxEmbeddingModel(), new SileroVad()));
+        var vm = new EnrollmentWizardViewModel(new AudioQualityAnalyzer(), new ProfileEnrollmentService(new OnnxEmbeddingModel(), new WebRtcVad()));
         string path = Path.Combine(Path.GetTempPath(), $"vs_delete_{Guid.NewGuid():N}.json");
         new VoiceProfile { ProfileName = "temp", Centroid = new float[4] }.SaveToFile(path);
         int changed = 0;
@@ -525,7 +521,7 @@ public class AppLayerTests : IDisposable
         try
         {
             var vm = new ResultsViewModel(new AudioPlaybackController());
-            vm.ExportSettingsProvider = () => new ReportExportSettings("temp", "speechbrain-ecapa-tdnn", "0.1.0", 0.48, 0.40, true, DateTimeOffset.UtcNow);
+            vm.BeginScan(new ReportExportSettings("temp", "speechbrain-ecapa-tdnn", "0.1.0", 0.48, 0.40, true, DateTimeOffset.UtcNow));
 
             await vm.ExportReportAsync(dir);
             Assert.False(Directory.Exists(dir)); // nothing to export yet

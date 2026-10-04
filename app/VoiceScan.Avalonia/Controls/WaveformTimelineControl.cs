@@ -8,12 +8,31 @@ namespace VoiceScan.App.Controls;
 
 public sealed class WaveformTimelineControl : Control
 {
-    private static readonly IBrush MatchBrush = new SolidColorBrush(Color.FromArgb(70, 34, 160, 107));
-    private static readonly IBrush PossibleBrush = new SolidColorBrush(Color.FromArgb(70, 224, 138, 30));
-    private static readonly IBrush LabelBrush = new SolidColorBrush(Color.FromRgb(139, 151, 166));
-    private static readonly IBrush CursorBrush = new SolidColorBrush(Color.FromRgb(56, 189, 248));
-    private static readonly IBrush BarBrush = new SolidColorBrush(Color.FromArgb(210, 107, 122, 142));
-    private static readonly IBrush BackgroundBrush = new SolidColorBrush(Color.FromRgb(16, 20, 26));
+    private static readonly IBrush MatchBrush = new SolidColorBrush(Color.FromArgb(70, 78, 159, 125));
+    private static readonly IBrush PossibleBrush = new SolidColorBrush(Color.FromArgb(70, 201, 146, 58));
+    private static readonly IBrush LabelBrush = new SolidColorBrush(Color.FromRgb(143, 137, 126));
+    private static readonly IBrush CursorBrush = new SolidColorBrush(Color.FromRgb(210, 112, 79));
+    private static readonly IBrush BarBrush = new SolidColorBrush(Color.FromArgb(220, 176, 168, 154));
+    private static readonly IBrush BackgroundBrush = new SolidColorBrush(Color.FromRgb(31, 29, 26));
+
+    public static readonly StyledProperty<WaveformEnvelope?> EnvelopeProperty =
+        AvaloniaProperty.Register<WaveformTimelineControl, WaveformEnvelope?>(nameof(Envelope));
+
+    static WaveformTimelineControl()
+    {
+        EnvelopeProperty.Changed.AddClassHandler<WaveformTimelineControl>((c, e) =>
+        {
+            var envelope = e.NewValue as WaveformEnvelope;
+            c.SetData(envelope, null, envelope?.DurationSeconds ?? 0.1);
+        });
+    }
+
+    /// <summary>Bindable alternative to <see cref="SetData"/> for a plain waveform without hit segments.</summary>
+    public WaveformEnvelope? Envelope
+    {
+        get => GetValue(EnvelopeProperty);
+        set => SetValue(EnvelopeProperty, value);
+    }
 
     private WaveformEnvelope? _envelope;
     private IReadOnlyList<HitSegmentResult>? _segments;
@@ -50,7 +69,7 @@ public sealed class WaveformTimelineControl : Control
         double height = Bounds.Height;
         if (width <= 0 || height <= 0) return;
 
-        context.DrawRectangle(BackgroundBrush, null, new Rect(0, 0, width, height), 10, 10);
+        context.DrawRectangle(BackgroundBrush, null, new Rect(0, 0, width, height), 8, 8);
 
         if (_segments != null)
         {
@@ -82,7 +101,7 @@ public sealed class WaveformTimelineControl : Control
 
         if (_hasData)
         {
-            DrawLabel(context, "00:00", new Point(8, height - 18));
+            DrawLabel(context, Format(0), new Point(8, height - 18));
             DrawLabel(context, Format(_currentPositionSeconds), new Point(width / 2 - 14, height - 18), CursorBrush, FontWeight.Bold);
             var total = Format(_durationSeconds);
             DrawLabel(context, total, new Point(width - 8 - total.Length * 7, height - 18));
@@ -100,7 +119,7 @@ public sealed class WaveformTimelineControl : Control
         SeekRequested?.Invoke(this, target);
     }
 
-    private static string Format(double seconds) => TimeSpan.FromSeconds(seconds).ToString(@"mm\:ss");
+    private static string Format(double seconds) => TimeFormat.Clock(seconds);
 
     private static void DrawLabel(DrawingContext context, string text, Point origin, IBrush? brush = null, FontWeight weight = FontWeight.Normal)
     {

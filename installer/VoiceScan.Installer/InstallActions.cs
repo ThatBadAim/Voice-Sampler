@@ -10,7 +10,13 @@ internal static class InstallActions
 {
     public const string AppName = "VoiceScan";
     private const string UninstallKey = @"Software\Microsoft\Windows\CurrentVersion\Uninstall\VoiceScan";
-    private const string FfmpegUrl = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip";
+    // A fixed release with its SHA-256 pinned here (checked against both GitHub and gyan.dev on 2026-10-04), so a
+    // compromised or replaced download is rejected instead of being verified against a checksum from the same server.
+    private const string FfmpegUrl = "https://github.com/GyanD/codexffmpeg/releases/download/9.0.2/ffmpeg-9.0.2-essentials_build.zip";
+    private const string FfmpegSha256 = "60f467265b1e312373dbcd92200c2618a74850f98d3d078e94296bb3fa2047ba";
+
+    /// <summary>Written into every install folder; uninstall only deletes a folder that carries it.</summary>
+    private const string InstallMarker = ".voicescan-install";
     private static readonly string[] FfmpegTools = ["ffmpeg", "ffprobe", "ffplay"];
 
     public static string DefaultInstallDir => Path.Combine(
@@ -33,8 +39,40 @@ internal static class InstallActions
         return FfmpegTools.All(tool => dirs.Any(d => File.Exists(Path.Combine(d, tool + ".exe"))));
     }
 
+    /// <summary>
+    /// Returns the full install path, or throws if installing there could later let uninstall delete unrelated files:
+    /// drive roots and non-empty folders that are not an earlier VoiceScan install are refused.
+    /// </summary>
+    public static string ValidateInstallDir(string installDir)
+    {
+        string full = Path.GetFullPath(installDir.Trim());
+        if (Path.GetPathRoot(full) is { } root && string.Equals(full.TrimEnd('\\', '/'), root.TrimEnd('\\', '/'), StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException("Choose a folder for VoiceScan, not the root of a drive.");
+        }
+        if (full.Contains('%') || full.Contains('"'))
+        {
+            throw new InvalidOperationException("Choose a folder whose path does not contain % or \" characters.");
+        }
+        if (Directory.Exists(full) && Directory.EnumerateFileSystemEntries(full).Any() && !IsVoiceScanFolder(full))
+        {
+            throw new InvalidOperationException(
+                $"{full} already contains other files. Choose an empty folder (or the folder of an earlier VoiceScan install) so uninstalling never removes anything else.");
+        }
+        return full;
+    }
+
+    /// <summary>
+    /// A folder this installer owns: it carries the marker, or it is the app-specific default location used by
+    /// installs made before the marker existed.
+    /// </summary>
+    private static bool IsVoiceScanFolder(string fullPath) =>
+        File.Exists(Path.Combine(fullPath, InstallMarker))
+        || string.Equals(fullPath.TrimEnd('\\', '/'), Path.GetFullPath(DefaultInstallDir).TrimEnd('\\', '/'), StringComparison.OrdinalIgnoreCase);
+
     public static void ExtractApp(string installDir, IProgress<(int Percent, string Text)> progress)
     {
+        installDir = ValidateInstallDir(installDir);
         using var payload = Assembly.GetExecutingAssembly().GetManifestResourceStream("payload.zip")
             ?? throw new InvalidOperationException("This installer was built without the application payload.");
         using var zip = new ZipArchive(payload, ZipArchiveMode.Read);
@@ -62,13 +100,15 @@ internal static class InstallActions
 
             progress.Report((++done * 60 / zip.Entries.Count, "Copying VoiceScan files..."));
         }
+
+        File.WriteAllText(Path.Combine(installDir, InstallMarker), "Folder created by the VoiceScan installer; uninstall removes it.");
     }
 
     /// <summary>Downloads the FFmpeg release build, checks its published SHA-256 and unpacks the three tools into installDir\ffmpeg.</summary>
     public static async Task InstallFfmpegAsync(string installDir, IProgress<(int Percent, string Text)> progress)
     {
         using var http = new HttpClient { Timeout = TimeSpan.FromMinutes(15) };
-        string expectedHash = (await http.GetStringAsync(FfmpegUrl + ".sha256")).Trim().Split(' ')[0];
+        const string expectedHash = FfmpegSha256;
 
         string zipPath = Path.Combine(Path.GetTempPath(), $"ffmpeg_{Guid.NewGuid():N}.zip");
         try
@@ -160,7 +200,11 @@ internal static class InstallActions
         return key?.GetValue("InstallLocation") as string;
     }
 
-    public static void Uninstall(string installDir, bool deleteUserData)
+    /// <summary>
+    /// Removes shortcuts, registration and (optionally) user data. The install folder is deleted only if it carries
+    /// the installer's marker; returns false when it was left in place for that reason.
+    /// </summary>
+    public static bool Uninstall(string installDir, bool deleteUserData)
     {
         foreach (var link in new[] { StartMenuLink, DesktopLink })
         {
@@ -169,12 +213,19 @@ internal static class InstallActions
         Registry.CurrentUser.DeleteSubKeyTree(UninstallKey, throwOnMissingSubKey: false);
         if (deleteUserData && Directory.Exists(DataDir)) Directory.Delete(DataDir, recursive: true);
 
+        string full = Path.GetFullPath(installDir);
+        if (!IsVoiceScanFolder(full) || full.Contains('%') || full.Contains('"'))
+        {
+            return false;
+        }
+
         // This process runs from the install folder, so a detached shell removes it after we exit.
-        Process.Start(new ProcessStartInfo("cmd.exe", $"/c ping -n 3 127.0.0.1 >nul & rmdir /s /q \"{installDir}\"")
+        Process.Start(new ProcessStartInfo("cmd.exe", $"/c ping -n 3 127.0.0.1 >nul & rmdir /s /q \"{full}\"")
         {
             CreateNoWindow = true,
             UseShellExecute = false
         });
+        return true;
     }
 
     private static void CreateShortcut(string linkPath, string target, string workingDir)

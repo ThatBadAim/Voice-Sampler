@@ -17,6 +17,13 @@ public sealed class VoiceProfile
     [JsonPropertyName("model_id")]
     public string ModelId { get; set; } = string.Empty;
 
+    /// <summary>
+    /// <see cref="ISpeakerEmbeddingModel.ModelVersion"/> of the model that produced the embeddings. Empty for profiles
+    /// enrolled before it was recorded; those must be re-enrolled.
+    /// </summary>
+    [JsonPropertyName("model_version")]
+    public string ModelVersion { get; set; } = string.Empty;
+
     [JsonPropertyName("created_at")]
     public string CreatedAt { get; set; } = DateTime.UtcNow.ToString("o");
 
@@ -40,8 +47,11 @@ public sealed class VoiceProfile
             Directory.CreateDirectory(dir);
         }
 
+        // Write to a sibling file first so a crash mid-write never leaves a truncated profile behind.
         var json = JsonSerializer.Serialize(this, new JsonSerializerOptions { WriteIndented = true });
-        File.WriteAllText(filePath, json);
+        string tempPath = filePath + ".tmp";
+        File.WriteAllText(tempPath, json);
+        File.Move(tempPath, filePath, overwrite: true);
     }
 
     public static VoiceProfile LoadFromFile(string filePath)

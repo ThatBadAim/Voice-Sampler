@@ -26,6 +26,7 @@ dotnet publish "${ROOT_DIR}/app/VoiceScan.Avalonia/VoiceScan.Avalonia.csproj" \
 echo "==> Bundling models and licenses..."
 mkdir -p "${APP_DIR}/models"
 cp "${ROOT_DIR}/models/ecapa_tdnn.onnx" "${ROOT_DIR}/models/titanet_small.onnx" "${ROOT_DIR}/models/manifest.json" "${APP_DIR}/models/"
+cp "${ROOT_DIR}/THIRD-PARTY-NOTICES.md" "${APP_DIR}/"
 cp "${ROOT_DIR}/docs/LICENSES.md" "${APP_DIR}/LICENSES.md"
 
 echo "==> Creating installer payload..."

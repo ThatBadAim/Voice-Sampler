@@ -31,6 +31,7 @@ foreach ($Model in @("ecapa_tdnn.onnx", "titanet_small.onnx")) {
     Copy-Item $Source $DestModels
 }
 Copy-Item (Join-Path $RootDir "models\manifest.json") $DestModels
+Copy-Item (Join-Path $RootDir "THIRD-PARTY-NOTICES.md") $OutputDir
 
 $PackagesDir = Join-Path $RootDir "dist\packages"
 New-Item -ItemType Directory -Force -Path $PackagesDir | Out-Null

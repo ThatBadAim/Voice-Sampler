@@ -6,9 +6,9 @@
     "semantic_hash": ""
   },
   "engine/VoiceScan.Cli/Program.cs": {
-    "mtime": 1791068894.0163202,
-    "seen": 1791069079.9162664,
-    "ast_hash": "453c184a19ff250a69ea9ad48574b9a5",
+    "mtime": 1791110890.7458403,
+    "seen": 1791111117.1203465,
+    "ast_hash": "f4a852af0cab3117140aa9ed696698a0",
     "semantic_hash": ""
   },
   "engine/VoiceScan.Cli/VoiceScan.Cli.csproj": {
@@ -240,9 +240,9 @@
     "semantic_hash": ""
   },
   "engine/VoiceScan.Core/AudioDecoder.cs": {
-    "mtime": 1791068702.1612785,
-    "seen": 1791069079.9162796,
-    "ast_hash": "330b80982fa88b180a0fc7b8b0553bb3",
+    "mtime": 1791075607.6497931,
+    "seen": 1791075622.734206,
+    "ast_hash": "a7d2299c81eb3a3794a742e0966b1c37",
     "semantic_hash": ""
   },
   "engine/VoiceScan.Core/Filterbank.cs": {
@@ -258,15 +258,15 @@
     "semantic_hash": ""
   },
   "engine/VoiceScan.Core/OnnxEmbeddingModel.cs": {
-    "mtime": 1791065380.955443,
-    "seen": 1791069079.9162955,
-    "ast_hash": "87e0e631d0b3cd561d5d0462d12e236a",
+    "mtime": 1791110653.242979,
+    "seen": 1791111117.1203794,
+    "ast_hash": "14a10b623a026a8db72ab411ca6698e1",
     "semantic_hash": ""
   },
   "engine/VoiceScan.Core/PipelineScanner.cs": {
-    "mtime": 1791068802.6498327,
-    "seen": 1791069079.9162977,
-    "ast_hash": "f33ff62a8083fcfb7a2a01370d4ea216",
+    "mtime": 1791110624.0508208,
+    "seen": 1791111117.1203845,
+    "ast_hash": "758a445ade22b338244bd4e2ba7036d6",
     "semantic_hash": ""
   },
   "engine/VoiceScan.Core/ProfileEnrollmentService.cs": {
@@ -276,9 +276,9 @@
     "semantic_hash": ""
   },
   "engine/VoiceScan.Core/ScanResultModels.cs": {
-    "mtime": 1791068752.5585563,
-    "seen": 1791069079.9163024,
-    "ast_hash": "76f8957316ac20cea35c031dc56e5a7d",
+    "mtime": 1791110557.7772052,
+    "seen": 1791111117.1203892,
+    "ast_hash": "37045b765b4872b5aed9c294240a8827",
     "semantic_hash": ""
   },
   "engine/VoiceScan.Core/SileroVad.cs": {
@@ -324,15 +324,15 @@
     "semantic_hash": ""
   },
   "engine/VoiceScan.Core/Storage/StorageEntities.cs": {
-    "mtime": 1791032250.3601174,
-    "seen": 1791049586.8578749,
-    "ast_hash": "3240f83655ffc424f15b970474c30d88",
+    "mtime": 1791110578.4847758,
+    "seen": 1791111117.120413,
+    "ast_hash": "f99aa5b703411391ba78c5bc46b72490",
     "semantic_hash": ""
   },
   "engine/VoiceScan.Core/Storage/VoiceScanDatabase.cs": {
-    "mtime": 1791068741.2544942,
-    "seen": 1791069079.9163263,
-    "ast_hash": "7df5e9d16eedc81a70f40f3bc5162056",
+    "mtime": 1791110578.485411,
+    "seen": 1791111117.1204154,
+    "ast_hash": "c4087cd3fbe5552bc73df36aec648a1a",
     "semantic_hash": ""
   },
   "engine/VoiceScan.Tests/StorageCacheTests.cs": {
@@ -384,9 +384,9 @@
     "semantic_hash": ""
   },
   "app/VoiceScan.App.Core/Models/ResultModels.cs": {
-    "mtime": 1791068761.001603,
-    "seen": 1791069079.916179,
-    "ast_hash": "482679d9882515204f203b362166318f",
+    "mtime": 1791110762.3096125,
+    "seen": 1791111117.120251,
+    "ast_hash": "ca8ee04fd2e9c36cd6395a43fcc438c7",
     "semantic_hash": ""
   },
   "app/VoiceScan.App.Core/Models/ReviewModels.cs": {
@@ -396,9 +396,9 @@
     "semantic_hash": ""
   },
   "app/VoiceScan.App.Core/Models/ScanModels.cs": {
-    "mtime": 1791049709.611575,
-    "seen": 1791050544.8991652,
-    "ast_hash": "9c20d6728011d1626970adea9c8b3be0",
+    "mtime": 1791110762.3093405,
+    "seen": 1791111117.1202579,
+    "ast_hash": "58cb921b11581570463095efc1b8bee0",
     "semantic_hash": ""
   },
   "app/VoiceScan.App.Core/Services/AudioPlaybackController.cs": {
@@ -414,9 +414,9 @@
     "semantic_hash": ""
   },
   "app/VoiceScan.App.Core/Services/BackgroundScanController.cs": {
-    "mtime": 1791068811.6448822,
-    "seen": 1791069079.9161935,
-    "ast_hash": "23d89e8b52f8ca06ff9c392b1d82c97d",
+    "mtime": 1791110801.6416767,
+    "seen": 1791111117.1202672,
+    "ast_hash": "f19660ff9578c3d431f2eb8b6fea49f3",
     "semantic_hash": ""
   },
   "app/VoiceScan.App.Core/Services/ReviewDatabase.cs": {
@@ -426,15 +426,15 @@
     "semantic_hash": ""
   },
   "app/VoiceScan.App.Core/Services/WaveformService.cs": {
-    "mtime": 1791052195.6850228,
-    "seen": 1791052688.9815855,
-    "ast_hash": "36db1b5cee38c4a2d2356c800f141496",
+    "mtime": 1791108631.9500554,
+    "seen": 1791108843.2496257,
+    "ast_hash": "9ed7757bcce228c2228fc1ea143869f8",
     "semantic_hash": ""
   },
   "app/VoiceScan.App.Core/ViewModels/EnrollmentWizardViewModel.cs": {
-    "mtime": 1791052232.067266,
-    "seen": 1791052688.9815874,
-    "ast_hash": "43a56621cabfcd3d48df07145ee4a02c",
+    "mtime": 1791108649.8528385,
+    "seen": 1791108843.2496278,
+    "ast_hash": "17eb1a85ea3ff4f98b25efa50c4ef8a7",
     "semantic_hash": ""
   },
   "app/VoiceScan.App.Core/ViewModels/MainAppViewModel.cs": {
@@ -444,9 +444,9 @@
     "semantic_hash": ""
   },
   "app/VoiceScan.App.Core/ViewModels/ResultsViewModel.cs": {
-    "mtime": 1791052267.9083161,
-    "seen": 1791052688.9815903,
-    "ast_hash": "ff49a182c83f06125bf43bb46460d977",
+    "mtime": 1791110825.8207214,
+    "seen": 1791111117.1202974,
+    "ast_hash": "aba3819a6282cfdc17cf4889d9cd365f",
     "semantic_hash": ""
   },
   "app/VoiceScan.App.Core/ViewModels/ReviewViewModel.cs": {
@@ -456,9 +456,9 @@
     "semantic_hash": ""
   },
   "app/VoiceScan.App.Core/ViewModels/ScanDashboardViewModel.cs": {
-    "mtime": 1791051000.340711,
-    "seen": 1791051269.5695348,
-    "ast_hash": "d9cd7e56bf514431a0c8c8515027a5af",
+    "mtime": 1791110853.6484327,
+    "seen": 1791111117.120302,
+    "ast_hash": "d8075d80f3af181cbdbbbcf5679c6367",
     "semantic_hash": ""
   },
   "app/VoiceScan.App.Core/VoiceScan.App.Core.csproj": {
@@ -504,9 +504,9 @@
     "semantic_hash": ""
   },
   "app/VoiceScan.App.Core/Services/EvidenceReportExporter.cs": {
-    "mtime": 1791068932.964385,
-    "seen": 1791069079.916197,
-    "ast_hash": "e0a29df60b17f51518ee58cb288edbab",
+    "mtime": 1791110825.8474138,
+    "seen": 1791111117.1202695,
+    "ast_hash": "1d7a90e51174f48d471a4fa08953fe1a",
     "semantic_hash": ""
   },
   "engine/VoiceScan.Core/Logging/VoiceScanLogger.cs": {
@@ -558,69 +558,69 @@
     "semantic_hash": ""
   },
   "app/VoiceScan.Avalonia/App.axaml.cs": {
-    "mtime": 1791051089.8493981,
-    "seen": 1791051269.5695367,
-    "ast_hash": "08d47e29f8e94c15f9ce1331881e3158",
+    "mtime": 1791109811.378066,
+    "seen": 1791109835.1077173,
+    "ast_hash": "2c283cdcad2102137c0cf3e41a4ed3ed",
     "semantic_hash": ""
   },
   "app/VoiceScan.Avalonia/AppServiceBootstrap.cs": {
-    "mtime": 1791051090.9214284,
-    "seen": 1791051269.5695376,
-    "ast_hash": "549d6b5decc01b8523d426911d3ba7c6",
+    "mtime": 1791110853.6492345,
+    "seen": 1791111117.1203096,
+    "ast_hash": "53c10fd4fa138a19bac472657286ec2f",
     "semantic_hash": ""
   },
   "app/VoiceScan.Avalonia/Controls/WaveformTimelineControl.cs": {
-    "mtime": 1791031356.9134927,
-    "seen": 1791031394.707359,
-    "ast_hash": "0a2b0078b460eefe0f4a8592b7e2339c",
+    "mtime": 1791109138.2649472,
+    "seen": 1791109383.8933613,
+    "ast_hash": "e82d6b1a9c59dafb347a8c06c34177b8",
     "semantic_hash": ""
   },
   "app/VoiceScan.Avalonia/MainWindow.axaml.cs": {
-    "mtime": 1791051052.9181135,
-    "seen": 1791051269.569539,
-    "ast_hash": "4f410a15dbeed061239cb535f064259d",
+    "mtime": 1791109555.9733052,
+    "seen": 1791109681.88533,
+    "ast_hash": "a06ff1a67b680202aa3138d78b398c87",
     "semantic_hash": ""
   },
   "app/VoiceScan.Avalonia/Program.cs": {
-    "mtime": 1791052366.72157,
-    "seen": 1791052688.9816034,
-    "ast_hash": "4e957c823bc994533a3ccefc8fda45ac",
+    "mtime": 1791109811.3777945,
+    "seen": 1791109835.1077294,
+    "ast_hash": "cf5128fb5fcbd364f475491042c3b66c",
     "semantic_hash": ""
   },
   "app/VoiceScan.Avalonia/Services/FilePickers.cs": {
-    "mtime": 1791051086.7643743,
-    "seen": 1791051269.5695405,
-    "ast_hash": "7ca645ae39542714b3944df14149cf3f",
+    "mtime": 1791110853.650021,
+    "seen": 1791111117.1203227,
+    "ast_hash": "0e26691b7b790b3178d9f4b79b424615",
     "semantic_hash": ""
   },
   "app/VoiceScan.Avalonia/Views/EnrollmentWizardView.axaml.cs": {
-    "mtime": 1791052240.2325387,
-    "seen": 1791052688.9816098,
-    "ast_hash": "5e7daa7fca764671eb2f99c7e8c12d7a",
+    "mtime": 1791108705.9772131,
+    "seen": 1791108843.2496614,
+    "ast_hash": "8bf7fa932da5fef0402cbd68e4f9186c",
     "semantic_hash": ""
   },
   "app/VoiceScan.Avalonia/Views/ResultsView.axaml.cs": {
-    "mtime": 1791052267.908789,
-    "seen": 1791052688.981611,
-    "ast_hash": "8dccd953156cbdd53f81363e4f51c3cd",
+    "mtime": 1791109555.9744887,
+    "seen": 1791109681.8853526,
+    "ast_hash": "97f4f291a2838654b051d26e539a9ab3",
     "semantic_hash": ""
   },
   "app/VoiceScan.Avalonia/Views/ReviewView.axaml.cs": {
-    "mtime": 1791026104.4872868,
-    "seen": 1791028630.3506,
-    "ast_hash": "b5290e582d90ef36c98739231c25376c",
+    "mtime": 1791109559.8199573,
+    "seen": 1791109681.8853552,
+    "ast_hash": "aeb23435691a42cc7ed5aef255e31ad9",
     "semantic_hash": ""
   },
   "app/VoiceScan.Avalonia/Views/ScanDashboardView.axaml.cs": {
-    "mtime": 1791051128.102694,
-    "seen": 1791051269.5695472,
-    "ast_hash": "8abadac1b1fa0347eda87666f340b731",
+    "mtime": 1791110853.6505709,
+    "seen": 1791111117.12034,
+    "ast_hash": "1f5ef5655c1baae8e940b085484ddccb",
     "semantic_hash": ""
   },
   "app/VoiceScan.Avalonia/VoiceScan.Avalonia.csproj": {
-    "mtime": 1791025881.6993313,
-    "seen": 1791028630.3506029,
-    "ast_hash": "84bb6cf022ffa0f7612742a288433d00",
+    "mtime": 1791075607.6497931,
+    "seen": 1791075622.7341924,
+    "ast_hash": "e84ba8556e15204014a27e30d8b98238",
     "semantic_hash": ""
   },
   "scripts/publish-linux.sh": {
@@ -642,9 +642,9 @@
     "semantic_hash": ""
   },
   "app/VoiceScan.Avalonia/Services/VerdictConverters.cs": {
-    "mtime": 1791031304.9548743,
-    "seen": 1791031394.7073798,
-    "ast_hash": "a75922d4ddf3234efb875fec05ee425e",
+    "mtime": 1791110825.7880342,
+    "seen": 1791111117.120328,
+    "ast_hash": "b3a1c3ae78ca048eee1c267b63e7f8db",
     "semantic_hash": ""
   },
   "engine/VoiceScan.Tests/fbank_golden.json": {
@@ -660,9 +660,9 @@
     "semantic_hash": ""
   },
   ".claude/settings.local.json": {
-    "mtime": 1791050513.5503361,
-    "seen": 1791050544.8991508,
-    "ast_hash": "7b48e30e3790c1fa5289f6137ead5e9d",
+    "mtime": 1791108576.5307384,
+    "seen": 1791108843.249556,
+    "ast_hash": "66ac796d8ed367278d3321e3f6cbde77",
     "semantic_hash": ""
   },
   "engine/VoiceScan.Tests/fixtures/jfk_speech.wav": {
@@ -678,9 +678,9 @@
     "semantic_hash": ""
   },
   "app/VoiceScan.Avalonia/SetupWindow.axaml.cs": {
-    "mtime": 1791051088.8175921,
-    "seen": 1791051269.5695431,
-    "ast_hash": "91d65ad4f58799d20ab83eb47c86e527",
+    "mtime": 1791110890.746955,
+    "seen": 1791111117.1203306,
+    "ast_hash": "220ba9ac9a24b8ac0c825905132e2918",
     "semantic_hash": ""
   },
   "engine/VoiceScan.Core/AppPaths.cs": {
@@ -759,6 +759,72 @@
     "mtime": 1791065657.1375499,
     "seen": 1791069079.916335,
     "ast_hash": "022b7167fc022d7e4b0172da89a00c1d",
+    "semantic_hash": ""
+  },
+  "engine/VoiceScan.Core/ModelIntegrity.cs": {
+    "mtime": 1791075548.7476153,
+    "seen": 1791075622.734218,
+    "ast_hash": "94a7f27a9a70a063896afac22884c1dd",
+    "semantic_hash": ""
+  },
+  "engine/VoiceScan.Tests/SecurityHardeningTests.cs": {
+    "mtime": 1791075556.3635206,
+    "seen": 1791075622.7342517,
+    "ast_hash": "aaa543e3f526a5f94be917624070a1a3",
+    "semantic_hash": ""
+  },
+  "app/VoiceScan.App.Core/Models/MediaFileItem.cs": {
+    "mtime": 1791108621.9819982,
+    "seen": 1791108843.2495842,
+    "ast_hash": "c6f24afde4408e6f4aae53c3d7000745",
+    "semantic_hash": ""
+  },
+  "app/VoiceScan.App.Core/Services/MediaFileCollector.cs": {
+    "mtime": 1791108621.9799984,
+    "seen": 1791108843.2496114,
+    "ast_hash": "1ec7d9e83d552a2b00ef6c8495891939",
+    "semantic_hash": ""
+  },
+  "engine/VoiceScan.Tests/BulkFileTests.cs": {
+    "mtime": 1791108742.4136863,
+    "seen": 1791108843.2497509,
+    "ast_hash": "36bfc34a5e3f4962f58f0767934184ac",
+    "semantic_hash": ""
+  },
+  "app/VoiceScan.Avalonia/Services/ResponsiveLayout.cs": {
+    "mtime": 1791109555.972325,
+    "seen": 1791109681.8853405,
+    "ast_hash": "0c586c75ee31bcc54020d2c73196447d",
+    "semantic_hash": ""
+  },
+  "app/VoiceScan.Avalonia/Services/CrashHandler.cs": {
+    "mtime": 1791109823.288835,
+    "seen": 1791109835.1077328,
+    "ast_hash": "8b4a9c76807b94d27c18008e4acd8d04",
+    "semantic_hash": ""
+  },
+  "app/VoiceScan.App.Core/Services/GpuUtilizationSampler.cs": {
+    "mtime": 1791110788.8937678,
+    "seen": 1791111117.1202762,
+    "ast_hash": "f667d401c04432150e98e9475842850e",
+    "semantic_hash": ""
+  },
+  "app/VoiceScan.App.Core/Services/UserSettings.cs": {
+    "mtime": 1791110853.612894,
+    "seen": 1791111117.1202877,
+    "ast_hash": "92cb4d7c2c1e51f7e44a7176b105ba4a",
+    "semantic_hash": ""
+  },
+  "engine/VoiceScan.Core/OrderedPrefetch.cs": {
+    "mtime": 1791110613.3365335,
+    "seen": 1791111117.1203816,
+    "ast_hash": "3cf10c992a6f38b196a37c14730de599",
+    "semantic_hash": ""
+  },
+  "engine/VoiceScan.Tests/ScanReliabilityTests.cs": {
+    "mtime": 1791111009.5778847,
+    "seen": 1791111117.1204343,
+    "ast_hash": "083671b9cfc2dba52b6071b6de0e38ad",
     "semantic_hash": ""
   }
 }

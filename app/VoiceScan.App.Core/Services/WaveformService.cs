@@ -70,3 +70,40 @@ public sealed class WaveformService : IWaveformService
         return new WaveformEnvelope(minPeaks, maxPeaks, duration, bucketCount);
     }
 }
+
+public static class WaveformPreview
+{
+    /// <summary>Shows or hides the item's waveform, decoding it on first use.</summary>
+    public static async Task ToggleAsync(MediaFileItem item, IWaveformService service, CancellationToken cancellationToken = default)
+    {
+        if (item.IsWaveformVisible)
+        {
+            item.IsWaveformVisible = false;
+            return;
+        }
+
+        item.IsWaveformVisible = true;
+        if (item.Waveform is not null || item.IsLoadingWaveform) return;
+
+        item.IsLoadingWaveform = true;
+        item.WaveformError = null;
+        try
+        {
+            var envelope = await service.GenerateEnvelopeAsync(item.Path, cancellationToken: cancellationToken);
+            if (envelope.BucketCount == 0) item.WaveformError = "No audio could be decoded from this file.";
+            else item.Waveform = envelope;
+        }
+        catch (OperationCanceledException)
+        {
+            item.IsWaveformVisible = false;
+        }
+        catch (Exception ex)
+        {
+            item.WaveformError = $"Could not draw waveform: {ex.Message}";
+        }
+        finally
+        {
+            item.IsLoadingWaveform = false;
+        }
+    }
+}

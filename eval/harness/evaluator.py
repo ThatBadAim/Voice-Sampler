@@ -238,18 +238,27 @@ def check_regression(
     min_recall: float | None = None,
     max_fa_per_hour: float | None = None,
     tolerance: float = 0.05,
+    fa_tolerance: float = 0.5,
+    max_errors: int = 0,
 ) -> tuple[bool, list[str]]:
-    """Check if metrics violate quality gates or regress beyond tolerance."""
+    """Check if metrics violate quality gates or regress beyond tolerance.
+
+    ``tolerance`` is in recall units (a fraction); ``fa_tolerance`` is in false alarms per hour.
+    """
     reasons = []
 
     recall = metrics.get("recall", 0.0)
     fa_hr = metrics.get("fa_per_hour", 0.0)
+    errors = int(metrics.get("error_count", 0))
+
+    if errors > max_errors:
+        reasons.append(f"{errors} file(s) could not be scanned (allowed: {max_errors}); metrics exclude them")
 
     if min_recall is not None and recall < (min_recall - tolerance):
         reasons.append(f"Recall {recall*100:.1f}% below minimum threshold {min_recall*100:.1f}% (tol={tolerance*100:.1f}%)")
 
-    if max_fa_per_hour is not None and fa_hr > (max_fa_per_hour + tolerance):
-        reasons.append(f"False Alarms/Hr {fa_hr:.2f} exceeds maximum threshold {max_fa_per_hour:.2f}")
+    if max_fa_per_hour is not None and fa_hr > (max_fa_per_hour + fa_tolerance):
+        reasons.append(f"False Alarms/Hr {fa_hr:.2f} exceeds maximum threshold {max_fa_per_hour:.2f} (tol={fa_tolerance:.2f}/hr)")
 
     if baseline_metrics:
         b_recall = baseline_metrics.get("recall", 0.0)
@@ -257,7 +266,7 @@ def check_regression(
 
         if recall < (b_recall - tolerance):
             reasons.append(f"Recall regressed from {b_recall*100:.1f}% to {recall*100:.1f}% (delta={recall - b_recall:+.2f})")
-        if fa_hr > (b_fa_hr + tolerance):
+        if fa_hr > (b_fa_hr + fa_tolerance):
             reasons.append(f"False alarms/hr regressed from {b_fa_hr:.2f} to {fa_hr:.2f} (delta={fa_hr - b_fa_hr:+.2f})")
 
     has_regression = len(reasons) > 0

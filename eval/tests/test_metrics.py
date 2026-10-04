@@ -10,6 +10,7 @@ from eval.harness.metrics import (
     compute_aggregate_metrics,
     compute_bootstrap_ci,
     compute_det_and_eer,
+    evaluate_file,
     FileEvalResult,
 )
 from eval.harness.evaluator import check_regression
@@ -110,3 +111,51 @@ def test_regression_gate_triggers():
     cand_good = {"recall": 0.92, "fa_per_hour": 0.8}
     has_reg, reasons = check_regression(cand_good, baseline_metrics=baseline, tolerance=0.05)
     assert has_reg is False
+
+
+def _gt(clip_id: str, present: bool) -> dict:
+    turns = [{"speaker_id": "t", "start_time_seconds": 1.0, "end_time_seconds": 4.0}] if present else []
+    return {"clip_id": clip_id, "target_present": present, "target_speaker_id": "t", "duration_seconds": 3600.0,
+            "speaker_turns": turns}
+
+
+def test_scan_errors_are_excluded_counted_and_fail_the_gate() -> None:
+    errored = evaluate_file(_gt("a.wav", False), {"verdict": "Error", "max_confidence": 0.0, "segments": []})
+    missing = evaluate_file(_gt("b.wav", True), None)
+    clean = evaluate_file(_gt("c.wav", False), {"verdict": "No match", "max_confidence": 0.1, "segments": []})
+
+    assert errored.is_error and missing.is_error
+    assert not (errored.is_true_negative or missing.is_false_negative)
+    metrics = compute_aggregate_metrics([errored, missing, clean])
+    assert metrics["error_count"] == 2.0
+    assert metrics["tn_count"] == 1.0
+
+    failed, reasons = check_regression(metrics)
+    assert failed and "could not be scanned" in reasons[0]
+    assert not check_regression(metrics, max_errors=2)[0]
+
+
+def test_scanner_verdict_decides_over_confidence() -> None:
+    # A "Possible" file may report a score above 0.5; it is not a Match.
+    item = {"verdict": "Possible", "max_confidence": 0.51,
+            "segments": [{"start_time_seconds": 1.0, "end_time_seconds": 3.0, "confidence": 0.51, "verdict": "Possible"}]}
+    result = evaluate_file(_gt("d.wav", False), item)
+    assert result.is_true_negative
+    assert result.false_alarm_segments_count == 0
+
+
+def test_fa_tolerance_is_separate_from_recall_tolerance() -> None:
+    metrics = {"recall": 0.95, "fa_per_hour": 1.4, "error_count": 0.0}
+    assert not check_regression(metrics, max_fa_per_hour=1.0, tolerance=0.05, fa_tolerance=0.5)[0]
+    assert check_regression(metrics, max_fa_per_hour=1.0, tolerance=0.05, fa_tolerance=0.2)[0]
+
+
+def test_run_eval_requires_an_explicit_scanner() -> None:
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    repo = Path(__file__).resolve().parents[2]
+    proc = subprocess.run([sys.executable, str(repo / "eval" / "run_eval.py")], capture_output=True, text=True)
+    assert proc.returncode != 0
+    assert "--scanner is required" in proc.stderr

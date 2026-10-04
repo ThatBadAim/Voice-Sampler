@@ -222,7 +222,7 @@ def main() -> int:
     parser.add_argument("command", choices=["fetch", "build", "run"])
     parser.add_argument("--data-dir", type=Path, required=True)
     parser.add_argument("--label", default="run")
-    parser.add_argument("--model", default="wespeaker")
+    parser.add_argument("--model", default="ecapa")
     parser.add_argument("--seed", type=int, default=1)
     parser.add_argument("scan_flags", nargs="*", help="extra flags for `VoiceScan.Cli scan`, after --")
     args = parser.parse_args()

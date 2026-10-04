@@ -3,23 +3,20 @@
 
     <Styles.Resources>
         <ResourceDictionary>
-            <Color x:Key="BrandPrimaryColor">#4F7CFF</Color>
-            <Color x:Key="VerdictMatchColor">#22A06B</Color>
-            <Color x:Key="VerdictPossibleColor">#E08A1E</Color>
-            <Color x:Key="VerdictNoMatchColor">#7A8794</Color>
-            <Color x:Key="TimelineCursorColor">#38BDF8</Color>
-            <SolidColorBrush x:Key="BrandPrimaryBrush" Color="{StaticResource BrandPrimaryColor}" />
+            <Color x:Key="VerdictMatchColor">#4E9F7D</Color>
+            <Color x:Key="VerdictPossibleColor">#C9923A</Color>
+            <Color x:Key="VerdictNoMatchColor">#8A857C</Color>
+            <Color x:Key="VerdictErrorColor">#C4584E</Color>
+            <SolidColorBrush x:Key="VerdictErrorBrush" Color="{StaticResource VerdictErrorColor}" />
             <SolidColorBrush x:Key="VerdictMatchBrush" Color="{StaticResource VerdictMatchColor}" />
             <SolidColorBrush x:Key="VerdictPossibleBrush" Color="{StaticResource VerdictPossibleColor}" />
             <SolidColorBrush x:Key="VerdictNoMatchBrush" Color="{StaticResource VerdictNoMatchColor}" />
-            <SolidColorBrush x:Key="TimelineCursorBrush" Color="{StaticResource TimelineCursorColor}" />
-            <SolidColorBrush x:Key="VerdictMatchSoftBrush" Color="#22A06B" Opacity="0.16" />
-            <SolidColorBrush x:Key="VerdictPossibleSoftBrush" Color="#E08A1E" Opacity="0.18" />
-            <SolidColorBrush x:Key="VerdictNoMatchSoftBrush" Color="#7A8794" Opacity="0.18" />
-            <SolidColorBrush x:Key="BrandSoftBrush" Color="#4F7CFF" Opacity="0.14" />
+            <SolidColorBrush x:Key="VerdictMatchSoftBrush" Color="#4E9F7D" Opacity="0.14" />
+            <SolidColorBrush x:Key="VerdictPossibleSoftBrush" Color="#C9923A" Opacity="0.14" />
+            <SolidColorBrush x:Key="VerdictNoMatchSoftBrush" Color="#8A857C" Opacity="0.14" />
 
-            <CornerRadius x:Key="CardRadius">10</CornerRadius>
-            <CornerRadius x:Key="ControlRadius">7</CornerRadius>
+            <CornerRadius x:Key="PanelRadius">8</CornerRadius>
+            <CornerRadius x:Key="ControlRadius">6</CornerRadius>
 
             <!-- 24x24 outline icons -->
             <StreamGeometry x:Key="IconScan">M11 4a7 7 0 1 0 4.2 12.6l4.6 4.6 1.4-1.4-4.6-4.6A7 7 0 0 0 11 4zm0 2a5 5 0 1 1 0 10 5 5 0 0 1 0-10z</StreamGeometry>
@@ -39,107 +36,135 @@
 
             <ResourceDictionary.ThemeDictionaries>
                 <ResourceDictionary x:Key="Light">
-                    <SolidColorBrush x:Key="WindowBackgroundBrush" Color="#F4F6F9" />
-                    <SolidColorBrush x:Key="SidebarBrush" Color="#FFFFFF" />
-                    <SolidColorBrush x:Key="SurfaceCardBrush" Color="#FFFFFF" />
-                    <SolidColorBrush x:Key="SurfaceRaisedBrush" Color="#F0F2F6" />
-                    <SolidColorBrush x:Key="SurfaceCardBorderBrush" Color="#E2E6EC" />
-                    <SolidColorBrush x:Key="TextPrimaryBrush" Color="#18202B" />
-                    <SolidColorBrush x:Key="TextSecondaryBrush" Color="#5E6B7A" />
-                    <SolidColorBrush x:Key="WaveformBarBrush" Color="#8392A5" />
-                    <SolidColorBrush x:Key="WaveformBackgroundBrush" Color="#EAEEF4" />
+                    <SolidColorBrush x:Key="WindowBackgroundBrush" Color="#F6F3EE" />
+                    <SolidColorBrush x:Key="SidebarBrush" Color="#EFEBE4" />
+                    <SolidColorBrush x:Key="SurfaceRaisedBrush" Color="#EDE9E1" />
+                    <SolidColorBrush x:Key="HairlineBrush" Color="#DDD7CC" />
+                    <SolidColorBrush x:Key="TextPrimaryBrush" Color="#1D1B18" />
+                    <SolidColorBrush x:Key="TextSecondaryBrush" Color="#6F695F" />
+                    <SolidColorBrush x:Key="BrandPrimaryBrush" Color="#B5502E" />
+                    <SolidColorBrush x:Key="BrandHoverBrush" Color="#C45E3B" />
+                    <SolidColorBrush x:Key="BrandPressedBrush" Color="#9E4325" />
                 </ResourceDictionary>
                 <ResourceDictionary x:Key="Dark">
-                    <SolidColorBrush x:Key="WindowBackgroundBrush" Color="#0E1116" />
-                    <SolidColorBrush x:Key="SidebarBrush" Color="#12161C" />
-                    <SolidColorBrush x:Key="SurfaceCardBrush" Color="#171C23" />
-                    <SolidColorBrush x:Key="SurfaceRaisedBrush" Color="#1E242D" />
-                    <SolidColorBrush x:Key="SurfaceCardBorderBrush" Color="#262D37" />
-                    <SolidColorBrush x:Key="TextPrimaryBrush" Color="#E8ECF1" />
-                    <SolidColorBrush x:Key="TextSecondaryBrush" Color="#8B97A6" />
-                    <SolidColorBrush x:Key="WaveformBarBrush" Color="#6B7A8E" />
-                    <SolidColorBrush x:Key="WaveformBackgroundBrush" Color="#10141A" />
+                    <SolidColorBrush x:Key="WindowBackgroundBrush" Color="#151412" />
+                    <SolidColorBrush x:Key="SidebarBrush" Color="#1A1917" />
+                    <SolidColorBrush x:Key="SurfaceRaisedBrush" Color="#1F1D1A" />
+                    <SolidColorBrush x:Key="HairlineBrush" Color="#2D2A26" />
+                    <SolidColorBrush x:Key="TextPrimaryBrush" Color="#ECE8E0" />
+                    <SolidColorBrush x:Key="TextSecondaryBrush" Color="#8F897E" />
+                    <SolidColorBrush x:Key="BrandPrimaryBrush" Color="#D2704F" />
+                    <SolidColorBrush x:Key="BrandHoverBrush" Color="#DE805F" />
+                    <SolidColorBrush x:Key="BrandPressedBrush" Color="#BC5F40" />
                 </ResourceDictionary>
             </ResourceDictionary.ThemeDictionaries>
         </ResourceDictionary>
     </Styles.Resources>
 
     <!-- Typography -->
+    <Style Selector="TextBlock">
+        <Setter Property="LineHeight" Value="22" />
+    </Style>
     <Style Selector="TextBlock.title">
-        <Setter Property="FontSize" Value="26" />
-        <Setter Property="FontWeight" Value="SemiBold" />
-        <Setter Property="LetterSpacing" Value="-0.3" />
+        <Setter Property="FontSize" Value="32" />
+        <Setter Property="FontWeight" Value="Light" />
+        <Setter Property="LineHeight" Value="40" />
+        <Setter Property="LetterSpacing" Value="-0.6" />
     </Style>
     <Style Selector="TextBlock.heading">
-        <Setter Property="FontSize" Value="15" />
-        <Setter Property="FontWeight" Value="SemiBold" />
+        <Setter Property="FontSize" Value="17" />
+        <Setter Property="FontWeight" Value="Medium" />
+        <Setter Property="LineHeight" Value="24" />
     </Style>
     <Style Selector="TextBlock.subtitle">
-        <Setter Property="FontSize" Value="14" />
+        <Setter Property="FontSize" Value="15" />
+        <Setter Property="LineHeight" Value="24" />
         <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
     </Style>
     <Style Selector="TextBlock.secondary">
-        <Setter Property="FontSize" Value="12" />
+        <Setter Property="FontSize" Value="13" />
+        <Setter Property="LineHeight" Value="20" />
         <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
     </Style>
     <Style Selector="TextBlock.metric-label">
         <Setter Property="FontSize" Value="11" />
-        <Setter Property="FontWeight" Value="SemiBold" />
-        <Setter Property="LetterSpacing" Value="0.8" />
+        <Setter Property="FontWeight" Value="Medium" />
+        <Setter Property="LetterSpacing" Value="1.2" />
         <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
     </Style>
     <Style Selector="TextBlock.metric-value">
-        <Setter Property="FontSize" Value="26" />
-        <Setter Property="FontWeight" Value="SemiBold" />
-        <Setter Property="LetterSpacing" Value="-0.4" />
+        <Setter Property="FontSize" Value="30" />
+        <Setter Property="FontWeight" Value="Light" />
+        <Setter Property="LineHeight" Value="38" />
+        <Setter Property="LetterSpacing" Value="-0.6" />
     </Style>
 
-    <!-- Surfaces -->
+    <!-- Surfaces: sections are separated by space and a hairline, not boxes -->
     <Style Selector="Border.card">
-        <Setter Property="Background" Value="{DynamicResource SurfaceCardBrush}" />
-        <Setter Property="BorderBrush" Value="{DynamicResource SurfaceCardBorderBrush}" />
-        <Setter Property="BorderThickness" Value="1" />
-        <Setter Property="CornerRadius" Value="{StaticResource CardRadius}" />
-        <Setter Property="Padding" Value="20" />
+        <Setter Property="BorderBrush" Value="{DynamicResource HairlineBrush}" />
+        <Setter Property="BorderThickness" Value="0,1,0,0" />
+        <Setter Property="Padding" Value="0,32,0,0" />
+    </Style>
+    <Style Selector="Border.panel">
+        <Setter Property="Background" Value="{DynamicResource SurfaceRaisedBrush}" />
+        <Setter Property="CornerRadius" Value="{StaticResource PanelRadius}" />
+        <Setter Property="Padding" Value="24" />
     </Style>
     <Style Selector="Border.callout">
-        <Setter Property="Background" Value="{DynamicResource BrandSoftBrush}" />
-        <Setter Property="CornerRadius" Value="{StaticResource ControlRadius}" />
-        <Setter Property="Padding" Value="14" />
+        <Setter Property="Background" Value="{DynamicResource SurfaceRaisedBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource HairlineBrush}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="CornerRadius" Value="{StaticResource PanelRadius}" />
+        <Setter Property="Padding" Value="24" />
     </Style>
     <Style Selector="Border.badge">
-        <Setter Property="CornerRadius" Value="999" />
-        <Setter Property="Padding" Value="9,2" />
+        <Setter Property="CornerRadius" Value="4" />
+        <Setter Property="Padding" Value="8,3" />
         <Setter Property="VerticalAlignment" Value="Center" />
     </Style>
     <Style Selector="Border.badge > TextBlock">
-        <Setter Property="FontSize" Value="11" />
-        <Setter Property="FontWeight" Value="SemiBold" />
+        <Setter Property="FontSize" Value="12" />
+        <Setter Property="FontWeight" Value="Medium" />
+        <Setter Property="LineHeight" Value="16" />
     </Style>
 
-    <!-- Buttons -->
+    <!-- Buttons: quiet outline by default, one solid accent per screen -->
     <Style Selector="Button">
         <Setter Property="CornerRadius" Value="{StaticResource ControlRadius}" />
-        <Setter Property="Padding" Value="14,8" />
-        <Setter Property="FontWeight" Value="Medium" />
-        <Setter Property="Background" Value="{DynamicResource SurfaceRaisedBrush}" />
-        <Setter Property="BorderBrush" Value="{DynamicResource SurfaceCardBorderBrush}" />
+        <Setter Property="Padding" Value="18,10" />
+        <Setter Property="FontWeight" Value="Normal" />
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderBrush" Value="{DynamicResource HairlineBrush}" />
         <Setter Property="BorderThickness" Value="1" />
     </Style>
-    <Style Selector="Button.accent">
+    <Style Selector="Button:pointerover /template/ ContentPresenter">
+        <Setter Property="Background" Value="{DynamicResource SurfaceRaisedBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource TextSecondaryBrush}" />
+        <Setter Property="TextElement.Foreground" Value="{DynamicResource TextPrimaryBrush}" />
+    </Style>
+    <Style Selector="Button:pressed /template/ ContentPresenter">
+        <Setter Property="Background" Value="{DynamicResource HairlineBrush}" />
+    </Style>
+    <Style Selector="Button:disabled /template/ ContentPresenter">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="Opacity" Value="0.4" />
+    </Style>
+    <Style Selector="Button.primary">
         <Setter Property="Background" Value="{DynamicResource BrandPrimaryBrush}" />
         <Setter Property="BorderThickness" Value="0" />
         <Setter Property="Foreground" Value="White" />
     </Style>
-    <Style Selector="Button.accent:pointerover /template/ ContentPresenter">
-        <Setter Property="Background" Value="#6490FF" />
+    <Style Selector="Button.primary:pointerover /template/ ContentPresenter">
+        <Setter Property="Background" Value="{DynamicResource BrandHoverBrush}" />
+        <Setter Property="BorderBrush" Value="Transparent" />
         <Setter Property="TextElement.Foreground" Value="White" />
     </Style>
-    <Style Selector="Button.accent:pressed /template/ ContentPresenter">
-        <Setter Property="Background" Value="#3E68E6" />
+    <Style Selector="Button.primary:pressed /template/ ContentPresenter">
+        <Setter Property="Background" Value="{DynamicResource BrandPressedBrush}" />
     </Style>
-    <Style Selector="Button.accent:disabled /template/ ContentPresenter">
-        <Setter Property="Opacity" Value="0.45" />
+    <Style Selector="Button.primary:disabled /template/ ContentPresenter">
+        <Setter Property="Background" Value="{DynamicResource BrandPrimaryBrush}" />
+        <Setter Property="Opacity" Value="0.35" />
         <Setter Property="TextElement.Foreground" Value="White" />
     </Style>
 
@@ -155,48 +180,80 @@
         <Setter Property="HorizontalContentAlignment" Value="Left" />
         <Setter Property="Background" Value="Transparent" />
         <Setter Property="BorderThickness" Value="0" />
-        <Setter Property="Padding" Value="12,9" />
+        <Setter Property="CornerRadius" Value="0" />
+        <Setter Property="Padding" Value="16,12" />
         <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
     </Style>
     <Style Selector="Button.nav:pointerover /template/ ContentPresenter">
-        <Setter Property="Background" Value="{DynamicResource SurfaceRaisedBrush}" />
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderBrush" Value="Transparent" />
         <Setter Property="TextElement.Foreground" Value="{DynamicResource TextPrimaryBrush}" />
     </Style>
     <Style Selector="Button.nav.active">
-        <Setter Property="Foreground" Value="{DynamicResource BrandPrimaryBrush}" />
+        <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource BrandPrimaryBrush}" />
+        <Setter Property="BorderThickness" Value="2,0,0,0" />
     </Style>
     <Style Selector="Button.nav.active /template/ ContentPresenter, Button.nav.active:pointerover /template/ ContentPresenter">
-        <Setter Property="Background" Value="{DynamicResource BrandSoftBrush}" />
-        <Setter Property="TextElement.Foreground" Value="{DynamicResource BrandPrimaryBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource BrandPrimaryBrush}" />
+        <Setter Property="TextElement.Foreground" Value="{DynamicResource TextPrimaryBrush}" />
+    </Style>
+
+    <!-- Compact window: icon-only sidebar -->
+    <Style Selector="Window.compact TextBlock.navlabel">
+        <Setter Property="IsVisible" Value="False" />
+    </Style>
+    <Style Selector="Window.compact Button.nav">
+        <Setter Property="HorizontalContentAlignment" Value="Center" />
+        <Setter Property="Padding" Value="0,14" />
     </Style>
 
     <!-- Inputs & lists -->
     <Style Selector="TextBox, ComboBox">
         <Setter Property="CornerRadius" Value="{StaticResource ControlRadius}" />
+        <Setter Property="MinHeight" Value="40" />
+        <Setter Property="Padding" Value="12,8" />
     </Style>
     <Style Selector="ListBox">
         <Setter Property="Background" Value="Transparent" />
     </Style>
     <Style Selector="ListBoxItem">
         <Setter Property="CornerRadius" Value="{StaticResource ControlRadius}" />
-        <Setter Property="Padding" Value="10,8" />
-        <Setter Property="Margin" Value="0,1" />
+        <Setter Property="Padding" Value="14,12" />
+        <Setter Property="Margin" Value="0,2" />
     </Style>
     <Style Selector="ProgressBar">
-        <Setter Property="MinHeight" Value="6" />
-        <Setter Property="CornerRadius" Value="3" />
+        <Setter Property="MinHeight" Value="4" />
+        <Setter Property="Foreground" Value="{DynamicResource BrandPrimaryBrush}" />
+        <Setter Property="CornerRadius" Value="2" />
     </Style>
     <Style Selector="ProgressBar /template/ Border#PART_Indicator">
-        <Setter Property="CornerRadius" Value="3" />
+        <Setter Property="CornerRadius" Value="2" />
+    </Style>
+    <Style Selector="Expander">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderThickness" Value="0" />
+    </Style>
+    <Style Selector="Expander /template/ ToggleButton#ExpanderHeader">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderThickness" Value="0" />
+        <Setter Property="Padding" Value="0,8" />
+    </Style>
+    <Style Selector="Expander /template/ ToggleButton#ExpanderHeader:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderBrush" Value="Transparent" />
+    </Style>
+    <Style Selector="CheckBox">
+        <Setter Property="Padding" Value="10,0,0,0" />
     </Style>
     <Style Selector="DataGrid">
         <Setter Property="Background" Value="Transparent" />
         <Setter Property="GridLinesVisibility" Value="Horizontal" />
-        <Setter Property="HorizontalGridLinesBrush" Value="{DynamicResource SurfaceCardBorderBrush}" />
+        <Setter Property="HorizontalGridLinesBrush" Value="{DynamicResource HairlineBrush}" />
     </Style>
     <Style Selector="Border.divider">
         <Setter Property="Height" Value="1" />
-        <Setter Property="Background" Value="{DynamicResource SurfaceCardBorderBrush}" />
+        <Setter Property="Background" Value="{DynamicResource HairlineBrush}" />
     </Style>
 
 </Styles>

@@ -27,14 +27,27 @@ public sealed class ScanMetadata
     [JsonPropertyName("model_id")]
     public string ModelId { get; set; } = string.Empty;
 
+    [JsonPropertyName("model_version")]
+    public string ModelVersion { get; set; } = string.Empty;
+
     [JsonPropertyName("engine_version")]
-    public string EngineVersion { get; set; } = "0.1.0";
+    public string EngineVersion { get; set; } = string.Empty;
 
     [JsonPropertyName("elapsed_seconds")]
     public double ElapsedSeconds { get; set; }
 
     [JsonPropertyName("threshold")]
     public double Threshold { get; set; }
+
+    // Null in results written before these settings were recorded; an evidence report needs them.
+    [JsonPropertyName("clustering_enabled")]
+    public bool? ClusteringEnabled { get; set; }
+
+    [JsonPropertyName("cluster_threshold")]
+    public double? ClusterThreshold { get; set; }
+
+    [JsonPropertyName("temporal_smoothing")]
+    public bool? TemporalSmoothing { get; set; }
 }
 
 public sealed class FileScanResult
@@ -62,6 +75,11 @@ public sealed class FileScanResult
 
     [JsonPropertyName("segments")]
     public List<DetectedSegment> Segments { get; set; } = new();
+
+    /// <summary>Set (with Verdict "Error") when the file could not be scanned.</summary>
+    [JsonPropertyName("error")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Error { get; set; }
 
     [JsonPropertyName("waveform_min_peaks")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]

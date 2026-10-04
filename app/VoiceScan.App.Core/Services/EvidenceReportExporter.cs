@@ -13,7 +13,8 @@ public sealed record ReportExportSettings(
     double Threshold,
     double ClusterThreshold,
     bool TemporalSmoothing,
-    DateTimeOffset ScanDateUtc);
+    DateTimeOffset ScanDateUtc,
+    bool ClusteringEnabled = true);
 
 public sealed record ExportResult(
     string CsvPath,
@@ -37,7 +38,7 @@ public sealed class EvidenceReportExporter
             Directory.CreateDirectory(audioHitsDir);
         }
 
-        string timestamp = settings.ScanDateUtc.ToString("yyyyMMdd_HHmmss");
+        string timestamp = settings.ScanDateUtc.UtcDateTime.ToString("yyyyMMdd_HHmmss", CultureInfo.InvariantCulture);
         string csvPath = Path.Combine(outputDirectory, $"voicescan_evidence_{timestamp}.csv");
         string pdfPath = Path.Combine(outputDirectory, $"voicescan_evidence_{timestamp}.pdf");
 
@@ -46,27 +47,34 @@ public sealed class EvidenceReportExporter
 
         // 1. Export CSV
         var csvBuilder = new StringBuilder();
-        csvBuilder.AppendLine("file_path,file_name,file_hash,file_duration_seconds,file_verdict,segment_id,start_time_seconds,end_time_seconds,duration_seconds,verdict,confidence,reason_flags,profile_name,model_id,engine_version,settings_snapshot,scan_date_utc,audio_clip_path");
+        csvBuilder.AppendLine("file_path,file_name,file_hash,file_duration_seconds,file_verdict,file_max_confidence,error_message,segment_id,start_time_seconds,end_time_seconds,duration_seconds,verdict,confidence,reason_flags,profile_name,model_id,engine_version,settings_snapshot,scan_date_utc,audio_track_index,audio_clip_path");
 
         string settingsJson = JsonSerializer.Serialize(new
         {
             settings.Threshold,
+            settings.ClusteringEnabled,
             settings.ClusterThreshold,
             settings.TemporalSmoothing
-        }).Replace("\"", "\"\"");
+        });
+        string scanDate = settings.ScanDateUtc.ToString("o", CultureInfo.InvariantCulture);
 
         foreach (var file in results)
         {
+            string fileColumns = string.Join(",",
+                Csv(file.FilePath), Csv(file.FileName), Csv(file.FileHash), Num(file.DurationSeconds, "F2"),
+                Csv(file.OverallVerdict), Num(file.MaxConfidence, "F4"), Csv(file.ErrorMessage ?? ""));
+            string settingsColumns = string.Join(",",
+                Csv(settings.ProfileName), Csv(settings.ModelId), Csv(settings.EngineVersion), Csv(settingsJson), Csv(scanDate),
+                file.AudioTrackIndex.ToString(CultureInfo.InvariantCulture));
+
             if (file.Segments.Count == 0)
             {
-                // Record file with no match
-                csvBuilder.AppendLine(string.Format(CultureInfo.InvariantCulture,
-                    "\"{0}\",\"{1}\",\"{2}\",{3:F2},\"{4}\",\"\",0,0,0,\"{4}\",0.000,\"[]\",\"{5}\",\"{6}\",\"{7}\",\"{8}\",\"{9}\",\"\"",
-                    file.FilePath, file.FileName, file.FileHash, file.DurationSeconds, file.OverallVerdict,
-                    settings.ProfileName, settings.ModelId, settings.EngineVersion, settingsJson, settings.ScanDateUtc.ToString("o")));
+                // One row per file even without hits, so the report also documents every negative and failed file.
+                csvBuilder.AppendLine(string.Join(",", fileColumns, "\"\"", "", "", "", "\"\"", "", "\"[]\"", settingsColumns, "\"\""));
                 continue;
             }
 
+            string clipTag = ClipTag(file);
             for (int s = 0; s < file.Segments.Count; s++)
             {
                 var seg = file.Segments[s];
@@ -75,7 +83,9 @@ public sealed class EvidenceReportExporter
 
                 if (extractAudioClips && File.Exists(file.FilePath) && seg.DurationSeconds > 0)
                 {
-                    string clipFileName = $"{Path.GetFileNameWithoutExtension(file.FileName)}_seg_{s + 1}_{seg.StartTimeSeconds:F1}s_{seg.EndTimeSeconds:F1}s.wav";
+                    // The tag (content hash, else full path) keeps clips of same-named files in different folders apart.
+                    string clipFileName = string.Create(CultureInfo.InvariantCulture,
+                        $"{Path.GetFileNameWithoutExtension(file.FileName)}_{clipTag}_seg_{s + 1}_{seg.StartTimeSeconds:F1}s_{seg.EndTimeSeconds:F1}s.wav");
                     string clipFullPath = Path.Combine(audioHitsDir, clipFileName);
 
                     try
@@ -85,25 +95,23 @@ public sealed class EvidenceReportExporter
                             clipFullPath,
                             seg.StartTimeSeconds,
                             seg.DurationSeconds,
+                            audioTrackIndex: file.AudioTrackIndex,
                             cancellationToken: cancellationToken);
 
                         clipRelPath = Path.Combine("audio_hits", clipFileName);
                         exportedAudioClips.Add(clipFullPath);
                     }
-                    catch (Exception ex)
+                    catch (Exception ex) when (ex is not OperationCanceledException)
                     {
                         VoiceScan.Core.Logging.VoiceScanLogger.Warn("EvidenceReportExporter", $"Failed to extract clip {clipFileName}: {ex.Message}");
                     }
                 }
 
-                string flags = JsonSerializer.Serialize(seg.ReasonFlags).Replace("\"", "\"\"");
-                csvBuilder.AppendLine(string.Format(CultureInfo.InvariantCulture,
-                    "\"{0}\",\"{1}\",\"{2}\",{3:F2},\"{4}\",\"{5}\",{6:F2},{7:F2},{8:F2},\"{9}\",{10:F3},\"{11}\",\"{12}\",\"{13}\",\"{14}\",\"{15}\",\"{16}\",\"{17}\"",
-                    file.FilePath, file.FileName, file.FileHash, file.DurationSeconds, file.OverallVerdict,
-                    seg.SegmentId, seg.StartTimeSeconds, seg.EndTimeSeconds, seg.DurationSeconds,
-                    seg.Verdict, seg.Confidence, flags,
-                    settings.ProfileName, settings.ModelId, settings.EngineVersion, settingsJson,
-                    settings.ScanDateUtc.ToString("o"), clipRelPath));
+                csvBuilder.AppendLine(string.Join(",",
+                    fileColumns,
+                    Csv(seg.SegmentId), Num(seg.StartTimeSeconds, "F2"), Num(seg.EndTimeSeconds, "F2"), Num(seg.DurationSeconds, "F2"),
+                    Csv(seg.Verdict), Num(seg.Confidence, "F4"), Csv(JsonSerializer.Serialize(seg.ReasonFlags)),
+                    settingsColumns, Csv(clipRelPath)));
             }
         }
 
@@ -131,11 +139,11 @@ public sealed class EvidenceReportExporter
             if (file.Segments.Count == 0)
             {
                 allRows.Add(new PdfRow(
-                    Truncate(file.FileName, 22),
+                    TruncateMiddle(file.FileName, 26),
                     file.OverallVerdict,
                     "--",
                     file.MaxConfidence.ToString("F3", CultureInfo.InvariantCulture),
-                    "(None)",
+                    file.IsError ? TruncateMiddle(file.ErrorMessage ?? "Scan failed", 40) : "(None)",
                     false,
                     false));
             }
@@ -147,7 +155,7 @@ public sealed class EvidenceReportExporter
                     bool isPoss = seg.Verdict.Equals("Possible", StringComparison.OrdinalIgnoreCase);
                     string flagsStr = seg.ReasonFlags.Count > 0 ? string.Join(", ", seg.ReasonFlags) : "Clean";
                     allRows.Add(new PdfRow(
-                        Truncate(file.FileName, 22),
+                        TruncateMiddle(file.FileName, 26),
                         seg.Verdict,
                         string.Format(CultureInfo.InvariantCulture, "{0:F1}s - {1:F1}s", seg.StartTimeSeconds, seg.EndTimeSeconds),
                         seg.Confidence.ToString("F3", CultureInfo.InvariantCulture),
@@ -185,49 +193,51 @@ public sealed class EvidenceReportExporter
         for (int p = 0; p < totalPages; p++)
         {
             var contentStream = new StringBuilder();
+            void AppendLine(string line) => contentStream.Append(line).Append('\n');
 
             void DrawText(double x, double y, string font, double size, string text, string rgb = "0 0 0")
             {
-                contentStream.AppendLine("BT");
-                contentStream.AppendLine(string.Format(CultureInfo.InvariantCulture, "/{0} {1:F1} Tf", font, size));
-                contentStream.AppendLine($"{rgb} rg");
-                contentStream.AppendLine(string.Format(CultureInfo.InvariantCulture, "{0:F1} {1:F1} Td", x, y));
-                contentStream.AppendLine($"({EscapePdf(text)}) Tj");
-                contentStream.AppendLine("ET");
+                AppendLine("BT");
+                AppendLine(string.Format(CultureInfo.InvariantCulture, "/{0} {1:F1} Tf", font, size));
+                AppendLine($"{rgb} rg");
+                AppendLine(string.Format(CultureInfo.InvariantCulture, "{0:F1} {1:F1} Td", x, y));
+                AppendLine($"({EscapePdf(text)}) Tj");
+                AppendLine("ET");
             }
 
             double y;
             if (p == 0)
             {
                 // Background header banner
-                contentStream.AppendLine("0.05 0.10 0.18 rg");
-                contentStream.AppendLine("36 760 523 50 re f");
+                AppendLine("0.05 0.10 0.18 rg");
+                AppendLine("36 760 523 50 re f");
 
                 // Header Title
                 DrawText(50, 780, "F2", 18, "VoiceScan Biometric Evidence Report", "1.0 1.0 1.0");
 
                 // Subtitle & Metadata
-                DrawText(50, 766, "F1", 9, $"Generated: {settings.ScanDateUtc:yyyy-MM-dd HH:mm:ss} UTC  |  Engine v{settings.EngineVersion}  |  100% Offline Biometrics", "0.8 0.8 0.8");
+                DrawText(50, 766, "F1", 9, string.Create(CultureInfo.InvariantCulture, $"Scan started: {settings.ScanDateUtc.UtcDateTime:yyyy-MM-dd HH:mm:ss} UTC  |  Engine v{settings.EngineVersion}  |  Processed offline"), "0.8 0.8 0.8");
 
                 // Overview Box
-                contentStream.AppendLine("0.95 0.95 0.95 rg");
-                contentStream.AppendLine("36 675 523 70 re f");
-                contentStream.AppendLine("0.80 0.80 0.80 RG");
-                contentStream.AppendLine("36 675 523 70 re S");
+                AppendLine("0.95 0.95 0.95 rg");
+                AppendLine("36 675 523 70 re f");
+                AppendLine("0.80 0.80 0.80 RG");
+                AppendLine("36 675 523 70 re S");
 
                 DrawText(50, 725, "F2", 10, $"TARGET PROFILE: {settings.ProfileName}", "0.1 0.1 0.1");
-                DrawText(50, 710, "F1", 9, $"Model ID: {settings.ModelId}   |   Score Threshold: {settings.Threshold:F2}   |   Cluster Dist Threshold: {settings.ClusterThreshold:F2}", "0.2 0.2 0.2");
+                DrawText(50, 710, "F1", 9, string.Create(CultureInfo.InvariantCulture, $"Model ID: {settings.ModelId}   |   Score Threshold: {settings.Threshold:F2}   |   Clustering: {(settings.ClusteringEnabled ? $"on, distance {settings.ClusterThreshold:F2}" : "off")}   |   Smoothing: {(settings.TemporalSmoothing ? "on" : "off")}"), "0.2 0.2 0.2");
 
                 int matchFiles = results.Count(r => r.OverallVerdict.Equals("Match", StringComparison.OrdinalIgnoreCase));
                 int possibleFiles = results.Count(r => r.OverallVerdict.Equals("Possible", StringComparison.OrdinalIgnoreCase));
                 int noMatchFiles = results.Count(r => r.OverallVerdict.Equals("No match", StringComparison.OrdinalIgnoreCase));
+                int errorFiles = results.Count(r => r.IsError);
                 int totalSegments = results.Sum(r => r.Segments.Count);
-                DrawText(50, 695, "F1", 9, $"Files Scanned: {results.Count}   |   Matches: {matchFiles}   |   Possible: {possibleFiles}   |   No Match: {noMatchFiles}   |   Total Hits: {totalSegments}", "0.2 0.2 0.2");
+                DrawText(50, 695, "F1", 9, $"Files Scanned: {results.Count}   |   Matches: {matchFiles}   |   Possible: {possibleFiles}   |   No Match: {noMatchFiles}   |   Errors: {errorFiles}   |   Total Hits: {totalSegments}", "0.2 0.2 0.2");
 
                 // Table Header
                 y = 645;
-                contentStream.AppendLine("0.15 0.25 0.35 rg");
-                contentStream.AppendLine(string.Format(CultureInfo.InvariantCulture, "36 {0:F1} 523 20 re f", y));
+                AppendLine("0.15 0.25 0.35 rg");
+                AppendLine(string.Format(CultureInfo.InvariantCulture, "36 {0:F1} 523 20 re f", y));
 
                 DrawText(42, y + 6, "F2", 9, "File Name", "1.0 1.0 1.0");
                 DrawText(170, y + 6, "F2", 9, "Verdict", "1.0 1.0 1.0");
@@ -240,16 +250,16 @@ public sealed class EvidenceReportExporter
             else
             {
                 // Compact header on subsequent pages
-                contentStream.AppendLine("0.05 0.10 0.18 rg");
-                contentStream.AppendLine("36 780 523 30 re f");
+                AppendLine("0.05 0.10 0.18 rg");
+                AppendLine("36 780 523 30 re f");
 
                 DrawText(50, 792, "F2", 12, $"VoiceScan Biometric Evidence Report (Cont. - Page {p + 1} of {totalPages})", "1.0 1.0 1.0");
                 DrawText(380, 792, "F1", 9, $"Target: {settings.ProfileName}", "0.8 0.8 0.8");
 
                 // Table Header
                 y = 750;
-                contentStream.AppendLine("0.15 0.25 0.35 rg");
-                contentStream.AppendLine(string.Format(CultureInfo.InvariantCulture, "36 {0:F1} 523 20 re f", y));
+                AppendLine("0.15 0.25 0.35 rg");
+                AppendLine(string.Format(CultureInfo.InvariantCulture, "36 {0:F1} 523 20 re f", y));
 
                 DrawText(42, y + 6, "F2", 9, "File Name", "1.0 1.0 1.0");
                 DrawText(170, y + 6, "F2", 9, "Verdict", "1.0 1.0 1.0");
@@ -264,11 +274,11 @@ public sealed class EvidenceReportExporter
             foreach (var row in pages[p])
             {
                 if (row.IsMatch)
-                    contentStream.AppendLine(string.Format(CultureInfo.InvariantCulture, "0.90 0.97 0.92 rg 36 {0:F1} 523 16 re f", y - 2));
+                    AppendLine(string.Format(CultureInfo.InvariantCulture, "0.90 0.97 0.92 rg 36 {0:F1} 523 16 re f", y - 2));
                 else if (row.IsPossible)
-                    contentStream.AppendLine(string.Format(CultureInfo.InvariantCulture, "0.98 0.95 0.90 rg 36 {0:F1} 523 16 re f", y - 2));
+                    AppendLine(string.Format(CultureInfo.InvariantCulture, "0.98 0.95 0.90 rg 36 {0:F1} 523 16 re f", y - 2));
                 else
-                    contentStream.AppendLine(string.Format(CultureInfo.InvariantCulture, "0.97 0.97 0.97 rg 36 {0:F1} 523 16 re f", y - 2));
+                    AppendLine(string.Format(CultureInfo.InvariantCulture, "0.97 0.97 0.97 rg 36 {0:F1} 523 16 re f", y - 2));
 
                 DrawText(42, y + 2, "F1", 8, row.FileName, "0.1 0.1 0.1");
                 DrawText(170, y + 2, "F1", 8, row.Verdict, "0.1 0.1 0.1");
@@ -280,14 +290,15 @@ public sealed class EvidenceReportExporter
             }
 
             // Footer Legal & Offline statement with page numbering
-            DrawText(36, 30, "F1", 8, $"CONFIDENTIAL & BIOMETRICALLY VERIFIED  |  VoiceScan Offline Engine  |  Page {p + 1} of {totalPages}", "0.5 0.5 0.5");
+            DrawText(36, 30, "F1", 8, $"CONFIDENTIAL  |  Confidence is a similarity score, not a calibrated probability  |  Page {p + 1} of {totalPages}", "0.5 0.5 0.5");
 
             pageStreams.Add(Encoding.Latin1.GetBytes(contentStream.ToString()));
         }
 
         // Assemble PDF 1.4 Object Structure
         var pdf = new MemoryStream();
-        using var writer = new StreamWriter(pdf, Encoding.Latin1, leaveOpen: true);
+        // PDF cross-reference entries must be exactly 20 bytes, so lines end in LF on every platform.
+        using var writer = new StreamWriter(pdf, Encoding.Latin1, leaveOpen: true) { NewLine = "\n" };
         writer.AutoFlush = true;
 
         writer.WriteLine("%PDF-1.4");
@@ -391,9 +402,32 @@ public sealed class EvidenceReportExporter
         return sb.ToString();
     }
 
-    private static string Truncate(string text, int maxLen)
+    /// <summary>Keeps both ends of a long name so files that share a prefix stay distinguishable.</summary>
+    private static string TruncateMiddle(string text, int maxLen)
     {
         if (text.Length <= maxLen) return text;
-        return text.Substring(0, maxLen - 2) + "..";
+        int head = (maxLen - 2) / 2;
+        int tail = maxLen - 2 - head;
+        return string.Concat(text.AsSpan(0, head), "..", text.AsSpan(text.Length - tail));
+    }
+
+    /// <summary>
+    /// Quotes a CSV text field (RFC 4180) and neutralizes values that spreadsheet programs would run as formulas.
+    /// </summary>
+    private static string Csv(string value)
+    {
+        if (value.Length > 0 && value[0] is '=' or '+' or '-' or '@' or '\t' or '\r')
+        {
+            value = "'" + value;
+        }
+        return "\"" + value.Replace("\"", "\"\"") + "\"";
+    }
+
+    private static string Num(double value, string format) => value.ToString(format, CultureInfo.InvariantCulture);
+
+    private static string ClipTag(FileVerdictResult file)
+    {
+        string source = string.IsNullOrEmpty(file.FileHash) ? Path.GetFullPath(file.FilePath) : file.FileHash;
+        return Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(source)))[..8];
     }
 }

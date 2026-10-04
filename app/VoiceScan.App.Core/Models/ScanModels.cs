@@ -21,8 +21,9 @@ public sealed record OverallScanProgress(
     TimeSpan ElapsedTime,
     TimeSpan? EstimatedTimeRemaining,
     double RealtimeMultiple,
-    double GpuUtilizationPercent,
+    double? GpuUtilizationPercent,
     double MemoryMegabytes,
     int TotalMatchesFound,
     int TotalPossibleFound,
-    int TotalNoMatchFound);
+    int TotalNoMatchFound,
+    int TotalErrors = 0);

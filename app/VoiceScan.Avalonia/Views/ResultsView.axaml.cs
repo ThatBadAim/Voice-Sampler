@@ -1,3 +1,5 @@
+using System.ComponentModel;
+using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Interactivity;
 using Avalonia.Threading;
@@ -9,6 +11,9 @@ namespace VoiceScan.App.Views;
 
 public partial class ResultsView : UserControl
 {
+    private ResultsViewModel? _subscribed;
+    private bool _attached;
+
     private ResultsViewModel? ViewModel => DataContext as ResultsViewModel;
 
     public ResultsView()
@@ -17,14 +22,45 @@ public partial class ResultsView : UserControl
         FilterCombo.ItemsSource = Enum.GetValues<VerdictFilter>();
         SortCombo.ItemsSource = Enum.GetValues<ResultSortColumn>();
         Timeline.SeekRequested += (_, pos) => ViewModel?.SeekTo(pos);
-
-        DataContextChanged += (_, _) =>
-        {
-            if (ViewModel is not { } vm) return;
-            vm.PropertyChanged += (_, e) => Dispatcher.UIThread.Post(() => OnViewModelChanged(vm, e.PropertyName));
-            RefreshSelectedFile(vm);
-        };
+        SizeChanged += (_, e) => ResponsiveLayout.SplitPanes(Split, e.NewSize.Width < ResponsiveLayout.StackedPageWidth,
+            360, ListPane, DetailPane, EmptyText);
+        DataContextChanged += (_, _) => Resubscribe();
     }
+
+    // Pages are recreated on every navigation; subscribing only while attached keeps the long-lived view model
+    // from accumulating handlers that hold on to (and keep updating) views that are no longer shown.
+    protected override void OnAttachedToVisualTree(VisualTreeAttachmentEventArgs e)
+    {
+        base.OnAttachedToVisualTree(e);
+        _attached = true;
+        Resubscribe();
+    }
+
+    protected override void OnDetachedFromVisualTree(VisualTreeAttachmentEventArgs e)
+    {
+        base.OnDetachedFromVisualTree(e);
+        _attached = false;
+        Resubscribe();
+    }
+
+    private void Resubscribe()
+    {
+        if (_subscribed is not null) _subscribed.PropertyChanged -= OnViewModelPropertyChanged;
+        _subscribed = _attached ? ViewModel : null;
+        if (_subscribed is not { } vm) return;
+
+        vm.PropertyChanged += OnViewModelPropertyChanged;
+        RefreshSelectedFile(vm);
+        RefreshPlayState(vm);
+        RefreshPosition(vm);
+    }
+
+    // Playback events arrive on a timer thread.
+    private void OnViewModelPropertyChanged(object? sender, PropertyChangedEventArgs e) =>
+        Dispatcher.UIThread.Post(() =>
+        {
+            if (ReferenceEquals(sender, _subscribed)) OnViewModelChanged(_subscribed!, e.PropertyName);
+        });
 
     private async void Export_Click(object? sender, RoutedEventArgs e)
     {
@@ -37,21 +73,28 @@ public partial class ResultsView : UserControl
         switch (property)
         {
             case nameof(ResultsViewModel.PlaybackPosition):
-                Timeline.UpdatePlaybackCursor(vm.PlaybackPosition);
-                var total = vm.SelectedFile?.DurationSeconds ?? 0.0;
-                PositionText.Text = $"{TimeSpan.FromSeconds(vm.PlaybackPosition):mm\\:ss} / {TimeSpan.FromSeconds(total):mm\\:ss}";
+                RefreshPosition(vm);
                 break;
             case nameof(ResultsViewModel.IsPlaying):
-                {
-                    PlayPauseText.Text = vm.IsPlaying ? "Pause" : "Play";
-                    PlayPauseIcon.Data = (Avalonia.Media.Geometry)this.FindResource(
-                        vm.IsPlaying ? "IconPause" : "IconPlay")!;
-                }
+                RefreshPlayState(vm);
                 break;
             case nameof(ResultsViewModel.SelectedFile):
                 RefreshSelectedFile(vm);
                 break;
         }
+    }
+
+    private void RefreshPosition(ResultsViewModel vm)
+    {
+        Timeline.UpdatePlaybackCursor(vm.PlaybackPosition);
+        var total = vm.SelectedFile?.DurationSeconds ?? 0.0;
+        PositionText.Text = $"{TimeFormat.Clock(vm.PlaybackPosition)} / {TimeFormat.Clock(total)}";
+    }
+
+    private void RefreshPlayState(ResultsViewModel vm)
+    {
+        PlayPauseText.Text = vm.IsPlaying ? "Pause" : "Play";
+        PlayPauseIcon.Data = (Avalonia.Media.Geometry)this.FindResource(vm.IsPlaying ? "IconPause" : "IconPlay")!;
     }
 
     private void RefreshSelectedFile(ResultsViewModel vm)

@@ -23,7 +23,7 @@ public sealed class ReviewSqliteRepository : IReviewRepository
 
     public ReviewSqliteRepository(string dbPath = "voice_scan_reviews.db", ProfileEnrollmentService? enrollmentService = null)
     {
-        _connectionString = $"Data Source={dbPath}";
+        _connectionString = new SqliteConnectionStringBuilder { DataSource = dbPath }.ToString();
         _enrollmentService = enrollmentService;
     }
 
@@ -90,6 +90,14 @@ public sealed class ReviewSqliteRepository : IReviewRepository
                 @flags, @decision, @timestamp, @notes, @emb
             )
             ON CONFLICT(segment_id) DO UPDATE SET
+                file_path = excluded.file_path,
+                file_hash = excluded.file_hash,
+                profile_name = excluded.profile_name,
+                start_time = excluded.start_time,
+                end_time = excluded.end_time,
+                confidence = excluded.confidence,
+                original_verdict = excluded.original_verdict,
+                reason_flags = excluded.reason_flags,
                 decision = excluded.decision,
                 decided_at_utc = excluded.decided_at_utc,
                 notes = excluded.notes,
@@ -174,7 +182,7 @@ public sealed class ReviewSqliteRepository : IReviewRepository
 
         // Load existing profile
         var doc = VoiceProfile.LoadFromFile(profilePath);
-        if (doc.Centroid.Length == 0) return false;
+        if (doc.Centroid.Length == 0 || doc.EnrollmentEmbeddings.Count == 0) return false;
 
         float[] confirmedVec = record.SegmentEmbedding ?? [];
         if (confirmedVec.Length != doc.Centroid.Length)
@@ -182,33 +190,12 @@ public sealed class ReviewSqliteRepository : IReviewRepository
             return false;
         }
 
-        // Weighted moving average: (Centroid * N + confirmedVec) / (N + 1)
-        int currentCount = Math.Max(1, doc.ClipCount);
-        float[] updatedCentroid = new float[doc.Centroid.Length];
-        double sumSq = 0.0;
-
-        for (int i = 0; i < updatedCentroid.Length; i++)
-        {
-            float val = (doc.Centroid[i] * currentCount + confirmedVec[i]) / (currentCount + 1);
-            updatedCentroid[i] = val;
-            sumSq += val * val;
-        }
-
-        // Re-normalize to unit length
-        float norm = (float)Math.Sqrt(sumSq);
-        if (norm > 1e-12f)
-        {
-            for (int i = 0; i < updatedCentroid.Length; i++)
-            {
-                updatedCentroid[i] /= norm;
-            }
-        }
-
-        doc.Centroid = updatedCentroid;
-        doc.ClipCount = currentCount + 1;
-        doc.TotalSpeechDurationSeconds += (record.EndTimeSeconds - record.StartTimeSeconds);
+        // The centroid stays what enrollment defines it as: the normalized mean of every embedding in the profile,
+        // so one confirmed segment carries the weight of one window, not of a whole enrollment clip.
         doc.EnrollmentEmbeddings.Add(confirmedVec);
-        doc.CreatedAt = DateTime.UtcNow.ToString("o");
+        doc.Centroid = ProfileEnrollmentService.ComputeCentroid(doc.EnrollmentEmbeddings);
+        doc.ClipCount += 1;
+        doc.TotalSpeechDurationSeconds += record.EndTimeSeconds - record.StartTimeSeconds;
 
         doc.SaveToFile(profilePath);
         return true;

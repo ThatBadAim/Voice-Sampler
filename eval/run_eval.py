@@ -35,8 +35,8 @@ def main() -> int:
     parser.add_argument(
         "--scanner",
         choices=["perfect", "random", "cli", "wespeaker", "campplus"],
-        default="perfect",
-        help="Scanner implementation to evaluate",
+        default=None,
+        help="Scanner to evaluate (required unless --compare); 'perfect' and 'random' are harness self-test stubs, not real scanners",
     )
     parser.add_argument("--threshold", type=float, default=None, help="Custom similarity threshold for baseline scanner")
     parser.add_argument(
@@ -70,7 +70,9 @@ def main() -> int:
     )
     parser.add_argument("--min-recall", type=float, default=None, help="Minimum recall threshold required")
     parser.add_argument("--max-fa-hr", type=float, default=None, help="Maximum false alarms/hr allowed")
-    parser.add_argument("--regression-tolerance", type=float, default=0.05, help="Tolerance margin before regression exit")
+    parser.add_argument("--regression-tolerance", type=float, default=0.05, help="Recall tolerance (fraction) before regression exit")
+    parser.add_argument("--fa-tolerance", type=float, default=0.5, help="False alarms/hr tolerance before regression exit")
+    parser.add_argument("--max-scan-errors", type=int, default=0, help="Files the scanner may fail on before the run fails")
 
     args = parser.parse_args()
 
@@ -81,7 +83,9 @@ def main() -> int:
         print(deltas["markdown_summary"])
         return 0
 
-    # 2. Select scanner
+    # 2. Select scanner. There is deliberately no default: the oracle stub would report perfect metrics.
+    if args.scanner is None:
+        parser.error("--scanner is required (choose 'cli' to evaluate VoiceScan)")
     if args.scanner == "perfect":
         scanner = PerfectGroundTruthScanner()
     elif args.scanner == "random":
@@ -134,6 +138,8 @@ def main() -> int:
         min_recall=args.min_recall,
         max_fa_per_hour=args.max_fa_hr,
         tolerance=args.regression_tolerance,
+        fa_tolerance=args.fa_tolerance,
+        max_errors=args.max_scan_errors,
     )
 
     if has_reg:

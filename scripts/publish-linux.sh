@@ -28,6 +28,7 @@ for model in ecapa_tdnn.onnx titanet_small.onnx; do
     cp "${ROOT_DIR}/models/${model}" "${OUTPUT_DIR}/models/"
 done
 cp "${ROOT_DIR}/models/manifest.json" "${OUTPUT_DIR}/models/"
+cp "${ROOT_DIR}/THIRD-PARTY-NOTICES.md" "${OUTPUT_DIR}/"
 
 echo "==> Packaging tarball..."
 mkdir -p "${ROOT_DIR}/dist/packages"

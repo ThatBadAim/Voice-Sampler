@@ -30,7 +30,7 @@ internal sealed class InstallForm : Form
             MaximumSize = new Size(500, 0)
         };
         _ffmpegNote.Text = _needsFfmpeg
-            ? "FFmpeg was not found on this computer. Setup will download it (about 115 MB, checksum verified) and keep it inside the VoiceScan folder."
+            ? "FFmpeg was not found on this computer. Setup will download FFmpeg 9.0.2 (about 115 MB, checked against a pinned checksum) and keep it inside the VoiceScan folder."
             : "FFmpeg is already installed. Nothing extra to download.";
 
         var dirRow = new TableLayoutPanel { ColumnCount = 2, AutoSize = true, Dock = DockStyle.Top };
@@ -61,7 +61,17 @@ internal sealed class InstallForm : Form
 
     private async Task RunInstallAsync()
     {
-        string dir = _dir.Text.Trim();
+        string dir;
+        try
+        {
+            dir = InstallActions.ValidateInstallDir(_dir.Text);
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or ArgumentException or IOException or UnauthorizedAccessException)
+        {
+            MessageBox.Show(this, ex.Message, "VoiceScan setup", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+
         _install.Enabled = _browse.Enabled = _dir.Enabled = false;
         IProgress<(int Percent, string Text)> progress = new Progress<(int Percent, string Text)>(p =>
         {

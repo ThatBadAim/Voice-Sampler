@@ -3,8 +3,10 @@ namespace VoiceScan.Core;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
 using System.Runtime.CompilerServices;
+using System.Text;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Channels;
@@ -30,6 +32,8 @@ public record DecodedAudioChunk(
 /// </summary>
 public static class AudioDecoder
 {
+    private const int StderrTailChars = 2000;
+
     /// <summary>
     /// Builds an FFmpeg/ffprobe launch with a discrete argument list (no shell-style quoting, so file names cannot inject options)
     /// and a protocol whitelist so media containers can never open network or other non-local inputs.
@@ -68,23 +72,13 @@ public static class AudioDecoder
             "-show_entries", "stream=index,codec_name,channels,sample_rate:stream_tags=title,language",
             "-of", "json", "-i", mediaFilePath);
 
+        var fallback = new[] { new AudioTrackInfo(0, "default", 1, DefaultSampleRate, null, null) };
         try
         {
-            using var process = Process.Start(startInfo);
-            if (process == null)
+            var (exitCode, json, _) = await RunToCompletionAsync(startInfo, cancellationToken);
+            if (exitCode != 0 || string.IsNullOrWhiteSpace(json))
             {
-                return Array.Empty<AudioTrackInfo>();
-            }
-
-            var outputTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
-            var errTask = process.StandardError.ReadToEndAsync(cancellationToken);
-            await process.WaitForExitAsync(cancellationToken);
-            var json = await outputTask;
-            await errTask;
-
-            if (process.ExitCode != 0 || string.IsNullOrWhiteSpace(json))
-            {
-                return new[] { new AudioTrackInfo(0, "default", 1, DefaultSampleRate, null, null) };
+                return fallback;
             }
 
             using var doc = JsonDocument.Parse(json);
@@ -111,14 +105,13 @@ public static class AudioDecoder
                 }
             }
 
-            return list.Count > 0
-                ? list
-                : new[] { new AudioTrackInfo(0, "default", 1, DefaultSampleRate, null, null) };
+            return list.Count > 0 ? list : fallback;
         }
-        catch (Exception)
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            // If ffprobe is unavailable or errors, fallback to default track 0
-            return new[] { new AudioTrackInfo(0, "default", 1, DefaultSampleRate, null, null) };
+            // If ffprobe is unavailable or errors, fall back to default track 0
+            Logging.VoiceScanLogger.Warn("AudioDecoder", $"ffprobe could not list tracks of {mediaFilePath}: {ex.Message}");
+            return fallback;
         }
     }
 
@@ -139,22 +132,12 @@ public static class AudioDecoder
 
         try
         {
-            using var process = Process.Start(startInfo);
-            if (process == null) return 0.0;
-
-            var outputTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
-            var errTask = process.StandardError.ReadToEndAsync(cancellationToken);
-            await process.WaitForExitAsync(cancellationToken);
-            string output = (await outputTask).Trim();
-            await errTask;
-
-            if (double.TryParse(output, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out double duration))
-            {
-                return duration;
-            }
-            return 0.0;
+            var (_, output, _) = await RunToCompletionAsync(startInfo, cancellationToken);
+            return double.TryParse(output.Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out double duration)
+                ? duration
+                : 0.0;
         }
-        catch
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
             return 0.0;
         }
@@ -163,13 +146,17 @@ public static class AudioDecoder
     /// <summary>
     /// Stream audio chunks from media file via FFmpeg process.
     /// Memory consumption is strictly bounded by channel capacity (default 8 chunks ~ 512KB RAM).
+    /// A decode that FFmpeg reports as failed surfaces as an <see cref="InvalidDataException"/> after the
+    /// chunks it did produce, so a truncated decode is never mistaken for the whole file.
     /// </summary>
+    /// <param name="maxDurationSeconds">Decode at most this much audio from the start of the file.</param>
     public static async IAsyncEnumerable<DecodedAudioChunk> StreamDecodeAsync(
         string mediaFilePath,
         int audioTrackIndex = 0,
         int sampleRate = DefaultSampleRate,
         int chunkSize = DefaultChunkSize,
-        [EnumeratorCancellation] CancellationToken cancellationToken = default)
+        [EnumeratorCancellation] CancellationToken cancellationToken = default,
+        double? maxDurationSeconds = null)
     {
         if (!File.Exists(mediaFilePath))
         {
@@ -184,63 +171,60 @@ public static class AudioDecoder
             SingleReader = true
         });
 
-        // Arguments: decode selected audio track directly to raw f32le 16kHz mono stdout stream
-        string mapArg = audioTrackIndex >= 0 ? $"0:a:{audioTrackIndex}?" : "0:a:0?";
-        var startInfo = CreateStartInfo("ffmpeg",
-            "-v", "error", "-i", mediaFilePath, "-map", mapArg,
-            "-f", "f32le", "-acodec", "pcm_f32le", "-ac", "1", "-ar", sampleRate.ToString(System.Globalization.CultureInfo.InvariantCulture), "-");
+        var inv = CultureInfo.InvariantCulture;
+        var args = new List<string> { "-v", "error", "-i", mediaFilePath, "-map", MapArgument(audioTrackIndex) };
+        if (maxDurationSeconds is > 0)
+        {
+            args.Add("-t");
+            args.Add(maxDurationSeconds.Value.ToString("F3", inv));
+        }
+        args.AddRange(["-f", "f32le", "-acodec", "pcm_f32le", "-ac", "1", "-ar", sampleRate.ToString(inv), "-"]);
+        var startInfo = CreateStartInfo("ffmpeg", [.. args]);
 
         var process = Process.Start(startInfo) ?? throw new InvalidOperationException($"Failed to launch FFmpeg for {mediaFilePath}");
         using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
 
         // Producer task: reads raw stdout and pushes chunks into bounded channel
-        _ = Task.Run(async () =>
+        var producer = Task.Run(async () =>
         {
-            Task? stderrDrainTask = null;
             try
             {
-                using (process)
+                // Drained concurrently so a chatty FFmpeg can never block on a full stderr pipe.
+                var stderrTask = ReadTailAsync(process.StandardError, linkedCts.Token);
+
+                var stream = process.StandardOutput.BaseStream;
+                byte[] byteBuffer = new byte[chunkSize * sizeof(float)];
+                long totalSamplesRead = 0;
+
+                int bytesRead;
+                while ((bytesRead = await ReadExactOrEofAsync(stream, byteBuffer, linkedCts.Token)) > 0)
                 {
-                    // Asynchronously drain stderr to prevent pipe buffer exhaustion and deadlock
-                    stderrDrainTask = Task.Run(async () =>
-                    {
-                        try
-                        {
-                            using var reader = process.StandardError;
-                            char[] buf = new char[1024];
-                            while (await reader.ReadAsync(buf.AsMemory(), linkedCts.Token) > 0) { }
-                        }
-                        catch
-                        {
-                            // Drain until process exits or is killed
-                        }
-                    });
+                    int floatCount = bytesRead / sizeof(float);
+                    if (floatCount == 0) continue;
 
-                    var stream = process.StandardOutput.BaseStream;
-                    byte[] byteBuffer = new byte[chunkSize * sizeof(float)];
-                    long totalSamplesRead = 0;
+                    float[] floatChunk = new float[floatCount];
+                    Buffer.BlockCopy(byteBuffer, 0, floatChunk, 0, floatCount * sizeof(float));
 
-                    int bytesRead;
-                    while ((bytesRead = await ReadExactOrEofAsync(stream, byteBuffer, linkedCts.Token)) > 0)
-                    {
-                        int floatCount = bytesRead / sizeof(float);
-                        if (floatCount == 0) continue;
+                    double startTime = (double)totalSamplesRead / sampleRate;
+                    totalSamplesRead += floatCount;
 
-                        float[] floatChunk = new float[floatCount];
-                        Buffer.BlockCopy(byteBuffer, 0, floatChunk, 0, floatCount * sizeof(float));
-
-                        double startTime = (double)totalSamplesRead / sampleRate;
-                        totalSamplesRead += floatCount;
-
-                        await channel.Writer.WriteAsync(
-                            new DecodedAudioChunk(floatChunk, totalSamplesRead - floatCount, startTime, false),
-                            linkedCts.Token);
-                    }
-
-                    await process.WaitForExitAsync(linkedCts.Token);
-                    if (stderrDrainTask != null) await stderrDrainTask;
-                    channel.Writer.Complete();
+                    await channel.Writer.WriteAsync(
+                        new DecodedAudioChunk(floatChunk, totalSamplesRead - floatCount, startTime, false),
+                        linkedCts.Token);
                 }
+
+                await process.WaitForExitAsync(linkedCts.Token);
+                string stderr = await stderrTask;
+                if (process.ExitCode != 0)
+                {
+                    throw new InvalidDataException(
+                        $"FFmpeg could not decode '{Path.GetFileName(mediaFilePath)}' (exit code {process.ExitCode}): {LastLine(stderr)}");
+                }
+                if (!string.IsNullOrWhiteSpace(stderr))
+                {
+                    Logging.VoiceScanLogger.Warn("AudioDecoder", $"FFmpeg reported problems decoding {mediaFilePath}: {LastLine(stderr)}");
+                }
+                channel.Writer.Complete();
             }
             catch (Exception ex)
             {
@@ -252,19 +236,12 @@ public static class AudioDecoder
             }
             finally
             {
-                try
-                {
-                    if (!process.HasExited)
-                    {
-                        process.Kill();
-                    }
-                }
-                catch
-                {
-                    // Ignore process cleanup errors
-                }
+                // Kill before Dispose: a disposed Process can no longer be queried or killed, and an FFmpeg
+                // left blocked on a full stdout pipe would otherwise linger until the pipe is finalized.
+                KillQuietly(process);
+                process.Dispose();
             }
-        }, linkedCts.Token);
+        });
 
         // Consumer: yields decoded chunks as they arrive
         try
@@ -280,6 +257,7 @@ public static class AudioDecoder
         finally
         {
             linkedCts.Cancel();
+            await producer;
         }
     }
 
@@ -302,39 +280,36 @@ public static class AudioDecoder
             Directory.CreateDirectory(parent);
         }
 
-        string mapArg = audioTrackIndex >= 0 ? $"0:a:{audioTrackIndex}?" : "0:a:0?";
-        var inv = System.Globalization.CultureInfo.InvariantCulture;
+        var inv = CultureInfo.InvariantCulture;
         var startInfo = CreateStartInfo("ffmpeg",
             "-y", "-v", "error",
             "-ss", Math.Max(0.0, startTimeSeconds).ToString("F3", inv),
             "-t", Math.Max(0.1, durationSeconds).ToString("F3", inv),
-            "-i", mediaFilePath, "-map", mapArg,
+            "-i", mediaFilePath, "-map", MapArgument(audioTrackIndex),
             "-ar", sampleRate.ToString(inv), "-ac", "1", "-c:a", "pcm_s16le", outputWavPath);
 
-        using var process = Process.Start(startInfo) ?? throw new InvalidOperationException($"Failed to launch FFmpeg for extraction: {outputWavPath}");
-        var stderrTask = process.StandardError.ReadToEndAsync(cancellationToken);
-        await process.WaitForExitAsync(cancellationToken);
-        string err = await stderrTask;
-        if (process.ExitCode != 0)
+        var (exitCode, _, err) = await RunToCompletionAsync(startInfo, cancellationToken);
+        if (exitCode != 0)
         {
-            throw new InvalidOperationException($"FFmpeg extraction failed ({process.ExitCode}): {err}");
+            throw new InvalidOperationException($"FFmpeg extraction failed ({exitCode}): {LastLine(err)}");
         }
     }
 
     /// <summary>
-    /// Reads entire file into a float array (useful for short enrollment clips or small test files).
-    /// Uses the streaming decoder internally.
+    /// Reads a whole (short) file into a float array, e.g. enrollment clips. Use <paramref name="maxDurationSeconds"/>
+    /// to bound memory when the input may be long.
     /// </summary>
     public static async Task<float[]> DecodeEntireFileAsync(
         string mediaFilePath,
         int audioTrackIndex = 0,
         int sampleRate = DefaultSampleRate,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        double? maxDurationSeconds = null)
     {
         var allChunks = new List<float[]>();
-        int totalSamples = 0;
+        long totalSamples = 0;
 
-        await foreach (var chunk in StreamDecodeAsync(mediaFilePath, audioTrackIndex, sampleRate, DefaultChunkSize, cancellationToken))
+        await foreach (var chunk in StreamDecodeAsync(mediaFilePath, audioTrackIndex, sampleRate, DefaultChunkSize, cancellationToken, maxDurationSeconds))
         {
             allChunks.Add(chunk.Samples);
             totalSamples += chunk.Samples.Length;
@@ -355,6 +330,66 @@ public static class AudioDecoder
         }
 
         return result;
+    }
+
+    private static string MapArgument(int audioTrackIndex) =>
+        $"0:a:{Math.Max(0, audioTrackIndex).ToString(CultureInfo.InvariantCulture)}?";
+
+    /// <summary>Runs a short-lived tool to completion, killing it if the caller cancels.</summary>
+    private static async Task<(int ExitCode, string Stdout, string Stderr)> RunToCompletionAsync(
+        ProcessStartInfo startInfo,
+        CancellationToken cancellationToken)
+    {
+        using var process = Process.Start(startInfo) ?? throw new InvalidOperationException($"Failed to launch {startInfo.FileName}");
+        try
+        {
+            var stdoutTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
+            var stderrTask = ReadTailAsync(process.StandardError, cancellationToken);
+            await process.WaitForExitAsync(cancellationToken);
+            return (process.ExitCode, await stdoutTask, await stderrTask);
+        }
+        finally
+        {
+            KillQuietly(process);
+        }
+    }
+
+    private static async Task<string> ReadTailAsync(StreamReader reader, CancellationToken cancellationToken)
+    {
+        var tail = new StringBuilder();
+        char[] buf = new char[1024];
+        try
+        {
+            int n;
+            while ((n = await reader.ReadAsync(buf.AsMemory(), cancellationToken)) > 0)
+            {
+                tail.Append(buf, 0, n);
+                if (tail.Length > StderrTailChars) tail.Remove(0, tail.Length - StderrTailChars);
+            }
+        }
+        catch (Exception ex) when (ex is OperationCanceledException or IOException or ObjectDisposedException)
+        {
+            // The process was killed or the caller gave up; whatever was read is still useful.
+        }
+        return tail.ToString();
+    }
+
+    private static string LastLine(string text)
+    {
+        var lines = text.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        return lines.Length > 0 ? lines[^1] : "no error details";
+    }
+
+    private static void KillQuietly(Process process)
+    {
+        try
+        {
+            if (!process.HasExited) process.Kill(entireProcessTree: true);
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception or NotSupportedException)
+        {
+            // Already exited, or never started.
+        }
     }
 
     private static async Task<int> ReadExactOrEofAsync(Stream stream, byte[] buffer, CancellationToken cancellationToken)

@@ -42,6 +42,9 @@ class FileEvalResult:
     is_false_positive: bool = False
     is_true_negative: bool = False
     is_false_negative: bool = False
+    # The scanner reported an error for this file or did not return it at all. Such files are excluded from
+    # TP/FP/TN/FN and from the FA/hr denominator, counted in error_count, and fail the quality gate by default.
+    is_error: bool = False
     false_alarm_segments_count: int = 0
     segment_matches: list[SegmentMatch] = field(default_factory=list)
 
@@ -85,16 +88,34 @@ def evaluate_file(
     max_confidence = 0.0
     file_verdict_match = False
 
+    file_verdict = str(scanner_item.get("verdict", "")).lower() if scanner_item else ""
+    if scanner_item is None or file_verdict == "error":
+        return FileEvalResult(
+            clip_id=clip_id,
+            target_speaker_id=target_speaker,
+            target_present=target_present,
+            snr_target_db=snr_target_db,
+            degradation=degradation,
+            duration_seconds=duration_seconds,
+            scanner_predicted_positive=False,
+            max_confidence=0.0,
+            is_error=True,
+        )
+
+    def is_positive(verdict: str, confidence: float) -> bool:
+        # The scanner's own verdict decides; the confidence threshold only applies to scanners that give no verdict.
+        if verdict:
+            return verdict in ("match", "positive")
+        return confidence >= match_verdict_threshold
+
     if scanner_item:
         max_confidence = float(scanner_item.get("max_confidence", 0.0))
-        file_verdict = str(scanner_item.get("verdict", "")).lower()
-        if file_verdict in ("match", "positive") or max_confidence >= match_verdict_threshold:
-            file_verdict_match = True
+        file_verdict_match = is_positive(file_verdict, max_confidence)
 
         for seg in scanner_item.get("segments", []):
             conf = float(seg.get("confidence", 0.0))
             seg_verdict = str(seg.get("verdict", "")).lower()
-            if seg_verdict in ("match", "positive") or conf >= match_verdict_threshold:
+            if is_positive(seg_verdict, conf):
                 predicted_segments.append(
                     {
                         "start": float(seg.get("start_time_seconds", 0.0)),
@@ -183,14 +204,17 @@ def compute_aggregate_metrics(file_results: list[FileEvalResult]) -> dict[str, f
             "fp_count": 0,
             "tn_count": 0,
             "fn_count": 0,
+            "error_count": 0,
         }
 
+    error_count = sum(1 for r in file_results if r.is_error)
+    scored = [r for r in file_results if not r.is_error]
     tp = sum(1 for r in file_results if r.is_true_positive)
     fp = sum(1 for r in file_results if r.is_false_positive)
     tn = sum(1 for r in file_results if r.is_true_negative)
     fn = sum(1 for r in file_results if r.is_false_negative)
 
-    total_duration_hours = sum(r.duration_seconds for r in file_results) / 3600.0
+    total_duration_hours = sum(r.duration_seconds for r in scored) / 3600.0
     total_false_alarms = sum(r.false_alarm_segments_count for r in file_results)
 
     recall = (tp / (tp + fn)) if (tp + fn) > 0 else 0.0
@@ -215,6 +239,7 @@ def compute_aggregate_metrics(file_results: list[FileEvalResult]) -> dict[str, f
         "fp_count": float(fp),
         "tn_count": float(tn),
         "fn_count": float(fn),
+        "error_count": float(error_count),
     }
 
 
@@ -261,6 +286,7 @@ def compute_det_and_eer(
     num_thresholds: int = 200,
 ) -> tuple[np.ndarray, np.ndarray, float, float]:
     """Compute DET curve points (FAR, FRR), Equal Error Rate (EER), and optimal threshold."""
+    file_results = [r for r in file_results if not r.is_error]
     scores = np.array([r.max_confidence for r in file_results], dtype=float)
     labels = np.array([1 if r.target_present else 0 for r in file_results], dtype=int)
 

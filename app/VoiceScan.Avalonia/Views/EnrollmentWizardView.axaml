@@ -2,18 +2,16 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:vm="using:VoiceScan.App.Core.ViewModels"
              xmlns:m="using:VoiceScan.App.Core.Models"
+             xmlns:c="using:VoiceScan.App.Controls"
              x:Class="VoiceScan.App.Views.EnrollmentWizardView"
              x:DataType="vm:EnrollmentWizardViewModel">
 
     <ScrollViewer>
-        <StackPanel Spacing="20" MaxWidth="1000" HorizontalAlignment="Stretch">
-            <StackPanel Spacing="4">
-                <TextBlock Text="Voices" Classes="title" />
-                <TextBlock Text="Teach VoiceScan what the person sounds like, then find them in your recordings. Takes about a minute." Classes="subtitle" TextWrapping="Wrap" />
-            </StackPanel>
+        <StackPanel Spacing="48" MaxWidth="880" HorizontalAlignment="Stretch">
+            <TextBlock Text="Voices" Classes="title" />
 
             <Border Classes="card" IsVisible="{Binding HasProfiles}">
-                <StackPanel Spacing="12">
+                <StackPanel Spacing="20">
                     <TextBlock Text="Your voices" Classes="heading" />
                     <ListBox x:Name="VoicesList" ItemsSource="{Binding Profiles}" SelectedItem="{Binding SelectedProfile}"
                              MaxHeight="220" KeyDown="VoicesList_KeyDown">
@@ -32,58 +30,70 @@
             </Border>
 
             <Border Classes="card">
-                <StackPanel Spacing="12">
-                    <TextBlock Text="Add a new voice" Classes="heading" />
-                    <TextBlock Text="1. Choose a voice sample" FontWeight="SemiBold" />
-                    <TextBlock Classes="secondary" TextWrapping="Wrap"
-                               Text="Pick a recording of only this person talking, ideally 30 seconds or more with no music, game sound or other voices. Audio and video files both work." />
-                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
-                        <TextBox Text="{Binding SelectedAudioPath}" IsReadOnly="True" PlaceholderText="No file chosen" />
-                        <Button Grid.Column="1" Classes="accent" Content="Choose file…" Click="BrowseAudio_Click" MinWidth="130" />
-                    </Grid>
-                    <ProgressBar IsIndeterminate="True" IsVisible="{Binding IsAnalyzing}" />
-                    <UniformGrid Columns="3" IsVisible="{Binding QualityReport, Converter={x:Static ObjectConverters.IsNotNull}}">
-                        <StackPanel>
-                            <TextBlock Text="SPEECH FOUND" Classes="metric-label" />
-                            <TextBlock Text="{Binding QualityReport.SpeechDurationSeconds, StringFormat={}{0:F0} s}" Classes="metric-value" />
+                <StackPanel Spacing="20">
+                    <TextBlock Text="New voice" Classes="heading" />
+                    <Border x:Name="DropZone" Classes="callout" DragDrop.AllowDrop="True">
+                        <StackPanel Spacing="16">
+                            <WrapPanel ItemSpacing="12" LineSpacing="12">
+                                <Button Classes="primary" Content="Add files…" Click="AddFiles_Click" MinWidth="130" />
+                                <Button Content="Add folder…" Click="AddFolder_Click" />
+                                <Button Content="Clear all" Click="ClearSamples_Click" IsEnabled="{Binding HasSamples}" />
+                            </WrapPanel>
+                                                        <ListBox ItemsSource="{Binding SampleFiles}" MaxHeight="340" SelectionMode="Toggle"
+                                     IsVisible="{Binding HasSamples}">
+                                <ListBox.ItemTemplate>
+                                    <DataTemplate x:DataType="m:EnrollmentSampleItem">
+                                        <StackPanel Spacing="10">
+                                            <Grid ColumnDefinitions="*,Auto,Auto,Auto" ColumnSpacing="12">
+                                                <StackPanel>
+                                                    <TextBlock Text="{Binding FileName}" TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Path}" />
+                                                    <TextBlock Classes="secondary" TextWrapping="Wrap"
+                                                               IsVisible="{Binding Report, Converter={x:Static ObjectConverters.IsNotNull}}">
+                                                        <Run Text="{Binding Report.Tier}" />
+                                                        <Run Text="{Binding Report.SpeechDurationSeconds, StringFormat=' · {0:F0} s speech'}" />
+                                                        <Run Text="{Binding Report.SnrEstimateDb, StringFormat=' · {0:F0} dB SNR'}" />
+                                                    </TextBlock>
+                                                    <ItemsControl ItemsSource="{Binding Report.FeedbackMessages}">
+                                                        <ItemsControl.ItemTemplate>
+                                                            <DataTemplate x:DataType="x:String">
+                                                                <TextBlock Classes="secondary" Text="{Binding StringFormat='• {0}'}" TextWrapping="Wrap" />
+                                                            </DataTemplate>
+                                                        </ItemsControl.ItemTemplate>
+                                                    </ItemsControl>
+                                                    <TextBlock Classes="secondary" Text="{Binding AnalysisError, StringFormat='Check failed: {0}'}"
+                                                               IsVisible="{Binding AnalysisError, Converter={x:Static ObjectConverters.IsNotNull}}" />
+                                                </StackPanel>
+                                                <ProgressBar Grid.Column="1" IsIndeterminate="True" Width="60" IsVisible="{Binding IsAnalyzing}" />
+                                                <Button Grid.Column="2" Content="Waveform" Click="ToggleWaveform_Click" />
+                                                <Button Grid.Column="3" Content="Remove" Click="RemoveSample_Click" />
+                                            </Grid>
+                                            <ProgressBar IsIndeterminate="True" IsVisible="{Binding IsLoadingWaveform}" />
+                                            <TextBlock Text="{Binding WaveformError}" Classes="secondary"
+                                                       IsVisible="{Binding WaveformError, Converter={x:Static ObjectConverters.IsNotNull}}" />
+                                            <c:WaveformTimelineControl Envelope="{Binding Waveform}" Height="90" Cursor="Arrow"
+                                                                       IsVisible="{Binding Waveform, Converter={x:Static ObjectConverters.IsNotNull}}" />
+                                        </StackPanel>
+                                    </DataTemplate>
+                                </ListBox.ItemTemplate>
+                            </ListBox>
                         </StackPanel>
-                        <StackPanel>
-                            <TextBlock Text="CLARITY (SNR)" Classes="metric-label" />
-                            <TextBlock Text="{Binding QualityReport.SnrEstimateDb, StringFormat={}{0:F0} dB}" Classes="metric-value" />
-                        </StackPanel>
-                        <StackPanel>
-                            <TextBlock Text="BACKGROUND NOISE" Classes="metric-label" />
-                            <TextBlock Text="{Binding QualityReport.NoiseFloorRms, StringFormat={}{0:F4}}" Classes="metric-value" />
-                        </StackPanel>
-                    </UniformGrid>
-                    <Border Classes="callout"
-                            IsVisible="{Binding QualityReport, Converter={x:Static ObjectConverters.IsNotNull}}">
-                        <ItemsControl ItemsSource="{Binding QualityReport.FeedbackMessages}">
-                            <ItemsControl.ItemTemplate>
-                                <DataTemplate x:DataType="x:String">
-                                    <TextBlock Text="{Binding StringFormat='• {0}'}" TextWrapping="Wrap" />
-                                </DataTemplate>
-                            </ItemsControl.ItemTemplate>
-                        </ItemsControl>
                     </Border>
+                    <ProgressBar IsIndeterminate="True" IsVisible="{Binding IsAnalyzing}" />
+                    <TextBlock Classes="secondary" Text="{Binding AcceptedSampleCount, StringFormat='{}{0} usable sample(s)'}" IsVisible="{Binding HasSamples}" />
                 </StackPanel>
             </Border>
 
             <Border Classes="card">
-                <StackPanel Spacing="16">
-                    <TextBlock Text="2. Name and confirm" FontWeight="SemiBold" />
-                    <TextBox Text="{Binding ProfileName}" PlaceholderText="Name, e.g. Alice" />
-                    <TextBlock Classes="secondary" TextWrapping="Wrap"
-                               Text="A voiceprint is sensitive biometric data. VoiceScan stores it only on this computer and never sends it anywhere." />
-                    <CheckBox IsChecked="{Binding HasConsent}">
-                        <TextBlock Text="The person whose voice this is has agreed to be enrolled." FontWeight="Medium" TextWrapping="Wrap" />
+                <StackPanel Spacing="24">
+                    <TextBlock Text="Name" Classes="heading" />
+                    <TextBox Text="{Binding ProfileName}" PlaceholderText="Name" />
+                    <CheckBox IsChecked="{Binding HasConsent}"
+                              ToolTip.Tip="A voiceprint is biometric data. VoiceScan stores it only on this computer.">
+                        <TextBlock Text="This person has agreed to be enrolled" TextWrapping="Wrap" />
                     </CheckBox>
-                    <Button Classes="accent" HorizontalAlignment="Left" Padding="22,10" Click="CreateProfile_Click"
+                    <Button Classes="primary" HorizontalAlignment="Left" Padding="28,12" Click="CreateProfile_Click"
                             IsEnabled="{Binding CanCreateProfile}">
-                        <StackPanel Orientation="Horizontal" Spacing="8">
-                            <PathIcon Data="{StaticResource IconSparkle}" />
-                            <TextBlock Text="Save voice and continue" />
-                        </StackPanel>
+                        <TextBlock Text="Save voice" />
                     </Button>
                     <ProgressBar IsIndeterminate="True" IsVisible="{Binding IsEnrolling}" />
                     <TextBlock Text="{Binding StatusMessage}" Classes="secondary" TextWrapping="Wrap" />

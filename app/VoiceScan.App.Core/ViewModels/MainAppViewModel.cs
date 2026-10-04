@@ -80,9 +80,9 @@ public sealed class MainAppViewModel : INotifyPropertyChanged
             Enrollment.Reset();
         };
 
-        Results.ExportSettingsProvider = BuildExportSettings;
-
         Enrollment.ProfilesChanged += () => Scan.RefreshProfiles();
+
+        Scan.ScanStarted += settings => Results.BeginScan(settings);
 
         Scan.ScanFinished += () =>
         {
@@ -103,32 +103,10 @@ public sealed class MainAppViewModel : INotifyPropertyChanged
                         seg.Verdict.Equals("Possible", StringComparison.OrdinalIgnoreCase) ||
                         seg.ReasonFlags.Count > 0);
 
-                    Review.EnqueueSegments(reviewCandidates, Scan.SelectedProfilePath != null ? Path.GetFileNameWithoutExtension(Scan.SelectedProfilePath) : "UnknownProfile", item.FileName);
+                    Review.EnqueueSegments(reviewCandidates, item.ProfileName ?? "Unknown profile", item.FileName, item.ProfilePath);
                 }
             }
         };
-    }
-
-    private ReportExportSettings BuildExportSettings()
-    {
-        string modelId = "speechbrain-ecapa-tdnn";
-        try
-        {
-            if (Scan.SelectedProfilePath is { } path) modelId = VoiceProfile.LoadFromFile(path).ModelId;
-        }
-        catch (Exception ex) when (ex is IOException or System.Text.Json.JsonException or InvalidOperationException)
-        {
-            // The report still records the default model id when the profile can no longer be read.
-        }
-
-        return new ReportExportSettings(
-            ProfileName: Scan.SelectedProfile?.Name ?? "Unknown",
-            ModelId: modelId,
-            EngineVersion: typeof(VoiceProfile).Assembly.GetName().Version?.ToString() ?? "0.1.0",
-            Threshold: new PipelineScanOptions().Threshold,
-            ClusterThreshold: Scan.ClusterThreshold,
-            TemporalSmoothing: Scan.UseTemporalSmoothing,
-            ScanDateUtc: DateTimeOffset.UtcNow);
     }
 
     public void NavigateTo(AppNavigationPage page)

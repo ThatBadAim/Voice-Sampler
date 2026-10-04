@@ -2,35 +2,36 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         x:Class="VoiceScan.App.SetupWindow"
         Title="VoiceScan setup"
-        Width="640" Height="520" CanResize="False"
+        Width="720" Height="640" CanResize="False"
         WindowStartupLocation="CenterScreen"
         Background="{DynamicResource WindowBackgroundBrush}">
 
-    <StackPanel Margin="32" Spacing="18" VerticalAlignment="Center">
-        <StackPanel Spacing="4">
-            <TextBlock Text="Almost ready" Classes="title" />
-            <TextBlock Text="VoiceScan needs a few things before it can scan. Everything stays on this computer." Classes="subtitle" TextWrapping="Wrap" />
+    <StackPanel Margin="56" Spacing="36" VerticalAlignment="Center">
+        <StackPanel Spacing="12">
+            <TextBlock Text="Setup" Classes="title" />
         </StackPanel>
 
         <Border x:Name="ModelsCard" Classes="card">
-            <StackPanel Spacing="10">
+            <StackPanel Spacing="16">
                 <TextBlock Text="Voice models" Classes="heading" />
                 <TextBlock x:Name="ModelsText" TextWrapping="Wrap" />
-                <StackPanel Orientation="Horizontal" Spacing="8">
-                    <Button Classes="accent" Content="Choose model files…" Click="ChooseModels_Click" />
+                <StackPanel Orientation="Horizontal" Spacing="12">
+                    <Button Classes="primary" Content="Locate models folder…" Click="LocateModels_Click"
+                            ToolTip.Tip="Pick a folder that contains the model files; VoiceScan finds and copies the ones it needs." />
+                    <Button Content="Choose files…" Click="ChooseModels_Click" />
                     <Button Content="Open models folder" Click="OpenModels_Click" />
                 </StackPanel>
             </StackPanel>
         </Border>
 
         <Border x:Name="ToolsCard" Classes="card">
-            <StackPanel Spacing="10">
+            <StackPanel Spacing="16">
                 <TextBlock Text="FFmpeg" Classes="heading" />
                 <TextBlock x:Name="ToolsText" TextWrapping="Wrap" />
             </StackPanel>
         </Border>
 
         <TextBlock x:Name="StatusText" Classes="secondary" TextWrapping="Wrap" />
-        <Button Classes="accent" HorizontalAlignment="Left" Padding="22,10" Content="Check again" Click="CheckAgain_Click" />
+        <Button Classes="primary" HorizontalAlignment="Left" Padding="28,12" Content="Check again" Click="CheckAgain_Click" />
     </StackPanel>
 </Window>

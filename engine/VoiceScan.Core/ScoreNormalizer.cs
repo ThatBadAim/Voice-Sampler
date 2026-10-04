@@ -15,6 +15,7 @@ public sealed class CohortDocument
     [JsonPropertyName("schema_version")]
     public string SchemaVersion { get; set; } = "1.0.0";
 
+    /// <summary>The <see cref="ISpeakerEmbeddingModel.ModelVersion"/> that produced the embeddings.</summary>
     [JsonPropertyName("model_id")]
     public string ModelId { get; set; } = string.Empty;
 
@@ -70,9 +71,22 @@ public sealed class ScoreNormalizer
         _topK = Math.Max(1, topK);
     }
 
-    public static ScoreNormalizer FromFile(string cohortFilePath, int topK = 50)
+    /// <summary>Loads a cohort built with exactly <paramref name="model"/>; impostor scores from another model are meaningless.</summary>
+    /// <exception cref="InvalidDataException">The cohort was built with a different model, version or embedding size.</exception>
+    public static ScoreNormalizer FromFile(string cohortFilePath, ISpeakerEmbeddingModel model, int topK = 50)
     {
         var doc = CohortDocument.LoadFromFile(cohortFilePath);
+        if (doc.ModelId != model.ModelVersion)
+        {
+            throw new InvalidDataException(
+                $"Cohort '{cohortFilePath}' was built with '{doc.ModelId}', but this scan uses '{model.ModelVersion}'. " +
+                "Build a cohort with the current model (VoiceScan.Cli cohort build).");
+        }
+        if (doc.Embeddings.Any(e => e.Length != model.EmbeddingDimension))
+        {
+            throw new InvalidDataException(
+                $"Cohort '{cohortFilePath}' contains embeddings that are not {model.EmbeddingDimension}-dimensional.");
+        }
         return new ScoreNormalizer(doc.Embeddings, topK);
     }
 

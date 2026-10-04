@@ -14,6 +14,11 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- Model checksums are compiled in so ModelIntegrity never trusts a manifest found next to a model file. -->
+    <EmbeddedResource Include="..\..\models\manifest.json" LogicalName="VoiceScan.Core.models.manifest.json" />
+  </ItemGroup>
+
+  <ItemGroup>
     <InternalsVisibleTo Include="VoiceScan.Tests" />
   </ItemGroup>
 

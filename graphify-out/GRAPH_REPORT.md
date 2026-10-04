@@ -1,16 +1,16 @@
 # Graph Report - Voice-Sampler  (2026-10-04)
 
 ## Corpus Check
-- 120 files · ~210,273 words
+- 131 files · ~215,157 words
 - Verdict: corpus is large enough that graph structure adds value.
 
 ## Summary
-- 1356 nodes · 2496 edges · 103 communities (85 shown, 16 thin omitted)
-- Extraction: 90% EXTRACTED · 10% INFERRED · 0% AMBIGUOUS · INFERRED: 239 edges (avg confidence: 0.83)
+- 1489 nodes · 2901 edges · 101 communities (89 shown, 10 thin omitted)
+- Extraction: 89% EXTRACTED · 11% INFERRED · 0% AMBIGUOUS · INFERRED: 328 edges (avg confidence: 0.83)
 - Token cost: 0 input · 0 output
 
 ## Graph Freshness
-- Built from commit: `095fdef8`
+- Built from commit: `975f4df1`
 - Run `git rev-parse HEAD` and compare to check if the graph is stale.
 - Run `graphify update .` after code changes (no API cost).
 
@@ -21,7 +21,7 @@
 - 2. Core Functional Requirements
 - VoiceScan: Project Plan (working title)
 - AGENTS.md — Agent Operating Guidelines for VoiceScan
-- baseline_experiment.py
+- .scan
 - CoreEngineTests
 - Model & Dataset Licensing Registry
 - vad
@@ -37,118 +37,116 @@
 - real_speech_eval.py
 - EvaluationCoordinator
 - VoiceScan.Core
-- DetectedSegment
-- ScoreNormalizer
-- .run_evaluation
+- BulkFileTests
+- OnnxEmbeddingModel
+- harness/__init__.py
 - ReviewViewModel
 - FileScanResult
 - 2. Step-by-Step Analysis & Empirical Deltas
-- FileNotFoundException
-- MainWindow
+- .Benchmark_Scanning50Files_ProfileB_RunsInFractionOfTime
+- MainAppViewModel
 - InstallActions
-- create_session
+- baseline_experiment.py
 - speech_and_noise
 - SpooledAudio
-- BaselineScanner
-- IAudioPlaybackController
-- IDisposable
+- IWaveformService
+- SileroVad
+- IAudioOutputSession
 - .LoadAndRunSample
-- BackgroundScanController
+- IBackgroundScanController
 - AudioPlaybackController
 - ResultsViewModel
 - ScanDashboardViewModel
 - EnrollmentWizardViewModel
 - 2. Screen Walkthrough & UI Reference
-- validate_test_directory
-- FakeSession
-- VerdictFilter
-- generator.py
-- AudioQualityReport
 - SyntheticDataGenerator
+- AppLayerTests
+- VerdictFilter
+- .StreamDecodeAsync
+- AudioQualityReport
+- generator.py
 - apply_degradation_chain
 - BaseScanner
-- WebRtcVad
-- .List
-- MainAppViewModel
-- ResultsView
-- ScanMetadata
+- MediaFileItem
+- IAudioPlaybackController
+- .MergeAdjacentHits
+- EnrollmentWizardView
+- .OnPropertyChanged
 - VoiceProfileSummary
-- Filterbank
-- VoiceScanLogger
-- FakeAudioOutput
+- .Collect
+- UserSettingsStore
+- CohortDocument
 - FileVerdictResult
 - .StartScanAsync
 - VoiceScan Base Version Documentation
 - SPEC: Avalonia Desktop App (Windows + Linux)
 - publish-linux.sh
-- .ScanFileAsync
+- ScoreNormalizer
 - .generate_split
-- mock_speaker_pool
-- VoiceScan.App.Core.ViewModels
-- .EstimateSnrDb
+- .ExtractWindows
+- EnrollmentSampleItem
+- .EnrollProfileAsync
 - VoiceScan
 - EnrollmentStep
 - VoiceScan.Installer.csproj
 - build-installer.sh
-- AppLayerTests
-- .StreamDecodeAsync
-- ReviewView
-- .ExtractWindows
-- .HandleScanCommandAsync
-- .ExportReportAsync
-- App
-- OnnxEmbeddingModel
-- VoiceProfile
-- .CreateMainViewModel
-- SileroVad
 - ScanExecutionState
-- .MissingModels
-- .EnrollProfileAsync
-- VoiceScan.Core.Storage
-- LogLevel
+- .HandleScanCommandAsync
+- BackgroundScanController
+- .ScanFileAsync
+- ScanMetadata
+- ResultSortColumn
+- Filterbank
+- ResultsView
+- .List
+- .ExportReportAsync
+- GpuUtilizationSampler
+- .AddSamplesAsync
+- .DrawLabel
+- ReviewView
+- .EstimateSnrDb
 - AppPaths
-- VerdictConverters
-- .StreamDecode_MultiHourAudio_BoundedMemoryUsage
-- DateTimeOffset
-- IEnumerable
-- ObservableCollection
-- SemaphoreSlim
-- ReadOnlySpan
-- Path
-- Start
+- VoiceProfile
+- CachedWindow
+- DetectedSegment
+- FakeAudioOutput
+- .ExportReportAsync
+- .ScoreAndAggregate
+- synthetic_speech_and_game_dirs
+- mock_speaker_pool
 
 ## God Nodes (most connected - your core abstractions)
-1. `VoiceScan.Core` - 40 edges
-2. `ResultsViewModel` - 39 edges
-3. `ScanDashboardViewModel` - 35 edges
-4. `EnrollmentWizardViewModel` - 35 edges
-5. `ReviewViewModel` - 30 edges
-6. `VoiceScanDatabase` - 29 edges
+1. `EnrollmentWizardViewModel` - 49 edges
+2. `ScanDashboardViewModel` - 46 edges
+3. `VoiceScan.Core` - 46 edges
+4. `ResultsViewModel` - 42 edges
+5. `VoiceScanDatabase` - 31 edges
+6. `ReviewViewModel` - 30 edges
 7. `AudioPlaybackController` - 27 edges
 8. `CoreEngineTests` - 26 edges
-9. `MainAppViewModel` - 23 edges
-10. `SileroVad` - 23 edges
+9. `OnnxEmbeddingModel` - 25 edges
+10. `SileroVad` - 25 edges
 
 ## Surprising Connections (you probably didn't know these)
 - `__getattr__()` --uses--> `BaselineScanner`  [INFERRED]
   eval/harness/__init__.py → research/baseline_experiment.py
-- `__getattr__()` --uses--> `BaselineScanner`  [INFERRED]
-  eval/harness/scanner_interface.py → research/baseline_experiment.py
 - `FakeAudioOutput` --references--> `Duration`  [EXTRACTED]
   engine/VoiceScan.Tests/AppLayerTests.cs → app/VoiceScan.App.Core/Models/ResultModels.cs
-- `BackgroundScanController` --references--> `PipelineScanner`  [EXTRACTED]
-  app/VoiceScan.App.Core/Services/BackgroundScanController.cs → engine/VoiceScan.Core/PipelineScanner.cs
-- `AudioQualityAnalyzer` --references--> `SileroVad`  [EXTRACTED]
-  app/VoiceScan.App.Core/Services/AudioQualityAnalyzer.cs → engine/VoiceScan.Core/SileroVad.cs
+- `__getattr__()` --uses--> `BaselineScanner`  [INFERRED]
+  eval/harness/scanner_interface.py → research/baseline_experiment.py
+- `FakeAudioOutput` --references--> `Path`  [EXTRACTED]
+  engine/VoiceScan.Tests/AppLayerTests.cs → app/VoiceScan.App.Core/Models/MediaFileItem.cs
+- `run()` --calls--> `Path`  [EXTRACTED]
+  eval/real_speech_eval.py → app/VoiceScan.App.Core/Models/MediaFileItem.cs
 
 ## Import Cycles
 - None detected.
 
-## Communities (103 total, 16 thin omitted)
+## Communities (101 total, 10 thin omitted)
 
 ### Community 0 - "VoiceScan.Avalonia.csproj"
 Cohesion: 0.08
-Nodes (23): net10.0, Microsoft.Data.Sqlite (10.0.12), Microsoft.NET.Sdk, net10.0, Microsoft.NET.Sdk, net10.0, Microsoft.NET.Sdk, net10.0 (+15 more)
+Nodes (24): net10.0, Microsoft.Data.Sqlite (10.0.12), Microsoft.NET.Sdk, net10.0, Microsoft.NET.Sdk, net10.0, Microsoft.NET.Sdk, net10.0 (+16 more)
 
 ### Community 1 - "VoiceScan System Design"
 Cohesion: 0.13
@@ -170,9 +168,9 @@ Nodes (15): 1. What the demo must prove, 2. Core technical approach, 3. Success 
 Cohesion: 0.25
 Nodes (7): 1. Project Summary & Stack, 2. Build, Test & Knowledge Graph Commands, 3. Shared Workflow Rules, 4. Anti-AI Slop Directives, 5. Coding Conventions, 6. Where Specs Live, AGENTS.md — Agent Operating Guidelines for VoiceScan
 
-### Community 6 - "baseline_experiment.py"
-Cohesion: 0.15
-Nodes (20): decode_audio_ffmpeg(), extract_speech_windows(), main(), merge_adjacent_hits(), Any, InferenceSession, ndarray, Path (+12 more)
+### Community 6 - ".scan"
+Cohesion: 0.16
+Nodes (15): decode_audio_ffmpeg(), extract_speech_windows(), merge_adjacent_hits(), Any, InferenceSession, ndarray, Extract 2.0s sliding windows with 1.0s hop strictly over speech intervals., Merge consecutive or overlapping hit windows into continuous detected speech… (+7 more)
 
 ### Community 7 - "CoreEngineTests"
 Cohesion: 0.26
@@ -191,12 +189,12 @@ Cohesion: 0.22
 Nodes (16): eval.synthetic module — VoiceScan synthetic data generation and evaluation…, align_or_tile_noise(), compute_active_power(), detect_speech_activity(), mix_at_snr(), ndarray, snr.py — Speech-active region SNR computation and signal mixing. Defines…, Compute sample-level boolean mask of speech activity using frame RMS energy. (+8 more)
 
 ### Community 15 - "VoiceScanDatabase"
-Cohesion: 0.14
-Nodes (16): CachedWindow, CacheStats, FastFileHasher, CancellationToken, IReadOnlyList, List, Task, VoiceProfile (+8 more)
+Cohesion: 0.26
+Nodes (8): CancellationToken, IReadOnlyList, List, SemaphoreSlim, Task, VoiceProfile, VoiceScanDatabase, SqliteConnection
 
 ### Community 16 - "evaluator.py"
-Cohesion: 0.17
-Nodes (23): evaluator.py — Central coordinator for running evaluations, logging, and…, eval.harness module — VoiceScan evaluation harness and metrics calculation., check_segment_overlap(), compute_aggregate_metrics(), compute_bootstrap_ci(), compute_det_and_eer(), evaluate_file(), FileEvalResult (+15 more)
+Cohesion: 0.14
+Nodes (26): check_regression(), get_git_commit_hash(), evaluator.py — Central coordinator for running evaluations, logging, and…, Check if metrics violate quality gates or regress beyond tolerance., check_segment_overlap(), compute_aggregate_metrics(), compute_bootstrap_ci(), compute_det_and_eer() (+18 more)
 
 ### Community 17 - "WindowItem"
 Cohesion: 0.10
@@ -207,200 +205,200 @@ Cohesion: 0.10
 Nodes (19): 1. Executive Summary & Pipeline Architecture, 2. Reproducible Dev-Set Benchmark Numbers, 3.1 Breakdown by Signal-to-Noise Ratio (SNR), 3.2 Breakdown by Degradation Chain, 3. Stratified Failure Analysis: Where It Works & Where It Fails, 4. Analysis of False Alarms, 5. Honest Viability Assessment, 6. Ranked List of the Three Most Promising Improvements (+11 more)
 
 ### Community 19 - "real_speech_eval.py"
-Cohesion: 0.32
-Nodes (11): build(), fetch(), main(), mix(), opus(), overlap(), ndarray, Path (+3 more)
+Cohesion: 0.33
+Nodes (10): build(), fetch(), main(), mix(), opus(), overlap(), ndarray, real_speech_eval.py — end-to-end engine evaluation on real read speech… (+2 more)
 
 ### Community 20 - "EvaluationCoordinator"
 Cohesion: 0.14
-Nodes (22): check_regression(), compare_runs(), EvaluationCoordinator, Path, Compare two evaluation result JSON files and return metric deltas., Check if metrics violate quality gates or regress beyond tolerance., PerfectGroundTruthScanner, RandomStubScanner (+14 more)
+Nodes (22): compare_runs(), EvaluationCoordinator, Compare two evaluation result JSON files and return metric deltas., PerfectGroundTruthScanner, RandomStubScanner, Stochastic stub scanner: returns random confidence scores ~ U(0, 1)., Oracle stub scanner: emits perfect detections with 1.0 confidence for target…, main() (+14 more)
 
 ### Community 21 - "VoiceScan.Core"
-Cohesion: 0.21
-Nodes (5): VoiceScan.Tests, VoiceScan.Core, VoiceScan.App.Core.Models, VoiceScan.Cli, VoiceScan.App.Core.Services
+Cohesion: 0.06
+Nodes (23): App, STAThread, Program, Control, ResponsiveLayout, VerdictConverters, AppBuilder, Application (+15 more)
 
-### Community 22 - "DetectedSegment"
-Cohesion: 0.20
-Nodes (12): End, DetectedSegment, Confidence, Embedding, EndTimeSeconds, ReasonFlags, StartTimeSeconds, Verdict (+4 more)
+### Community 22 - "BulkFileTests"
+Cohesion: 0.18
+Nodes (9): CancellationToken, Fact, IReadOnlyList, ReadOnlySpan, Task, BulkFileTests, FakeAnalyzer, FakeWaveformService (+1 more)
 
-### Community 23 - "ScoreNormalizer"
-Cohesion: 0.26
-Nodes (5): List, ScoreNormalizer, CohortSize, Mean, StdDev
+### Community 23 - "OnnxEmbeddingModel"
+Cohesion: 0.12
+Nodes (13): IReadOnlyList, ISpeakerEmbeddingModel, ActiveProvider, EmbeddingDimension, IsCudaActive, ModelId, InferenceSession, IReadOnlyList (+5 more)
 
-### Community 24 - ".run_evaluation"
-Cohesion: 0.16
-Nodes (15): categorize_snr(), get_git_commit_hash(), Any, Log test set execution to persistent log file., Categorize SNR in dB into standard reporting buckets., Execute full evaluation run on a dataset., export_json(), generate_markdown_report() (+7 more)
+### Community 24 - "harness/__init__.py"
+Cohesion: 0.15
+Nodes (15): categorize_snr(), Any, Log test set execution to persistent log file., Categorize SNR in dB into standard reporting buckets., Execute full evaluation run on a dataset., __getattr__(), eval.harness module — VoiceScan evaluation harness and metrics calculation., export_json() (+7 more)
 
 ### Community 25 - "ReviewViewModel"
-Cohesion: 0.07
-Nodes (36): DateTimeOffset, IReadOnlyList, ReviewDecision, Confirmed, Rejected, Unreviewed, ReviewDecisionRecord, ReviewQueueItem (+28 more)
+Cohesion: 0.08
+Nodes (33): DateTimeOffset, IReadOnlyList, ReviewDecision, Confirmed, Rejected, Unreviewed, ReviewDecisionRecord, ReviewQueueItem (+25 more)
 
 ### Community 26 - "FileScanResult"
-Cohesion: 0.13
-Nodes (16): List, FileScanResult, AudioTrackIndex, ClipId, DurationSeconds, FileHash, FilePath, MaxConfidence (+8 more)
+Cohesion: 0.15
+Nodes (14): List, FileScanResult, AudioTrackIndex, ClipId, DurationSeconds, Error, FileHash, FilePath (+6 more)
 
 ### Community 27 - "2. Step-by-Step Analysis & Empirical Deltas"
 Cohesion: 0.15
 Nodes (12): 1. Executive Summary & Progression, 2. Step-by-Step Analysis & Empirical Deltas, 3. Best-Performing Engine Configuration, 4. Verification Commands, Headline Progression Table, Real-speech re-evaluation (2026-10-03) — supersedes the synthetic dev-set numbers below, Step 1: Within-File Speaker Clustering (Agglomerative Hierarchical Clustering), Step 2: Temporal Smoothing and Segment Aggregation (+4 more)
 
-### Community 28 - "FileNotFoundException"
-Cohesion: 0.20
-Nodes (7): CohortDocument, CohortSize, CreatedAt, Embeddings, ModelId, SchemaVersion, FileNotFoundException
+### Community 28 - ".Benchmark_Scanning50Files_ProfileB_RunsInFractionOfTime"
+Cohesion: 0.28
+Nodes (5): FastFileHasher, Fact, Task, StorageCacheTests, FileStream
 
-### Community 29 - "MainWindow"
-Cohesion: 0.15
-Nodes (10): AppNavigationPage, Enrollment, Results, Review, Scan, Button, RoutedEventArgs, MainWindow (+2 more)
+### Community 29 - "MainAppViewModel"
+Cohesion: 0.06
+Nodes (26): AppNavigationPage, Enrollment, Results, Review, Scan, MainAppViewModel, CurrentPage, Enrollment (+18 more)
 
 ### Community 30 - "InstallActions"
 Cohesion: 0.07
-Nodes (22): Progress, CheckBox, VoiceScan.Installer, Form, Task, InstallActions, DataDir, DefaultInstallDir (+14 more)
+Nodes (25): Progress, CheckBox, VoiceScan.Installer, Fact, Task, StreamingMemoryTests, Form, Task (+17 more)
 
-### Community 31 - "create_session"
-Cohesion: 0.24
-Nodes (9): compute_fbank(), create_session(), InferenceSession, ndarray, Path, verify_models.py — Verification of speaker embedding models (Prompt 2). Loads…, 80-dim log-mel fbank with mean normalization, matching kaldi-native-fbank. Same…, Initialize ONNX session prioritizing CUDA, falling back to CPU with warning. (+1 more)
+### Community 31 - "baseline_experiment.py"
+Cohesion: 0.17
+Nodes (13): Path, main(), baseline_experiment.py — Feasibility spike baseline pipeline in /research.…, Execute evaluation run for a given model and produce reports., run_experiment(), compute_fbank(), create_session(), InferenceSession (+5 more)
 
 ### Community 32 - "speech_and_noise"
 Cohesion: 0.50
 Nodes (4): fixture, ndarray, Create speech signal with silence gaps and background noise., speech_and_noise()
 
 ### Community 33 - "SpooledAudio"
-Cohesion: 0.09
-Nodes (17): CancellationToken, ReadOnlySpan, Task, IWaveformService, WaveformService, List, Max, Min (+9 more)
+Cohesion: 0.12
+Nodes (12): List, Max, Min, ReadOnlySpan, EnvelopeAccumulator, SampleCount, Max, Min (+4 more)
 
-### Community 34 - "BaselineScanner"
-Cohesion: 0.32
-Nodes (7): __getattr__(), Path, test_baseline_scanner.py — Acceptance tests for the BaselineScanner feasibility…, test_baseline_scanner_execution_on_dev_clip(), test_baseline_scanner_instantiation(), BaselineScanner, Feasibility Baseline Scanner implementing the full end-to-end VoiceScan…
+### Community 34 - "IWaveformService"
+Cohesion: 0.29
+Nodes (6): CancellationToken, ReadOnlySpan, Task, IWaveformService, WaveformPreview, WaveformService
 
-### Community 35 - "IAudioPlaybackController"
-Cohesion: 0.14
-Nodes (6): IAudioPlaybackController, CurrentFilePath, CurrentPositionSeconds, IsAudioAvailable, IsPlaying, TotalDurationSeconds
+### Community 35 - "SileroVad"
+Cohesion: 0.12
+Nodes (13): IReadOnlyList, ProbabilityStream, SileroVad, SettingsFingerprint, IReadOnlyList, List, ProbabilityStream, ReadOnlySpan (+5 more)
 
-### Community 36 - "IDisposable"
-Cohesion: 0.09
-Nodes (18): IReadOnlyList, FfplayAudioOutput, IsAvailable, FfplaySession, HasExited, IAudioOutput, IsAvailable, IAudioOutputSession (+10 more)
+### Community 36 - "IAudioOutputSession"
+Cohesion: 0.11
+Nodes (14): IReadOnlyList, FfplayAudioOutput, IsAvailable, FfplaySession, HasExited, IAudioOutput, IsAvailable, IAudioOutputSession (+6 more)
 
 ### Community 37 - ".LoadAndRunSample"
 Cohesion: 0.28
 Nodes (5): InferenceSession, GpuModelSample, ModelVerificationResult, Fact, GpuModelSampleTests
 
-### Community 38 - "BackgroundScanController"
-Cohesion: 0.12
-Nodes (12): Stopwatch, BackgroundScanController, CurrentProgress, CurrentState, IBackgroundScanController, CurrentProgress, CurrentState, CancellationTokenSource (+4 more)
+### Community 38 - "IBackgroundScanController"
+Cohesion: 0.22
+Nodes (3): IBackgroundScanController, CurrentProgress, CurrentState
 
 ### Community 39 - "AudioPlaybackController"
-Cohesion: 0.12
-Nodes (11): IAudioOutput, IAudioOutputSession, Stopwatch, AudioPlaybackController, CurrentFilePath, CurrentPositionSeconds, IsAudioAvailable, IsPlaying (+3 more)
+Cohesion: 0.15
+Nodes (9): Stopwatch, AudioPlaybackController, CurrentFilePath, CurrentPositionSeconds, IsAudioAvailable, IsPlaying, TotalDurationSeconds, ElapsedEventArgs (+1 more)
 
 ### Community 40 - "ResultsViewModel"
-Cohesion: 0.08
-Nodes (22): CancellationToken, Func, IEnumerable, List, ObservableCollection, Task, ResultsViewModel, ExportSettingsProvider (+14 more)
+Cohesion: 0.10
+Nodes (19): Func, IEnumerable, List, ObservableCollection, ResultsViewModel, ExportStatus, FilteredFiles, HasResults (+11 more)
 
 ### Community 41 - "ScanDashboardViewModel"
-Cohesion: 0.10
-Nodes (19): ObservableCollection, ScanDashboardViewModel, CanCancelScan, CanPauseScan, CanResumeScan, CanStartScan, ClusterThreshold, CompletedFiles (+11 more)
+Cohesion: 0.08
+Nodes (21): ObservableCollection, ScanDashboardViewModel, CanCancelScan, CanEditFiles, CanPauseScan, CanResumeScan, CanStartScan, ClusterThreshold (+13 more)
 
 ### Community 42 - "EnrollmentWizardViewModel"
-Cohesion: 0.10
-Nodes (19): ObservableCollection, EnrollmentWizardViewModel, CanCreateProfile, CanDeleteProfile, CanProceedFromAudioSelection, CanProceedFromConsent, CanProceedFromQuality, CreatedProfile (+11 more)
+Cohesion: 0.09
+Nodes (21): ObservableCollection, EnrollmentWizardViewModel, AcceptedSampleCount, CanCreateProfile, CanDeleteProfile, CanProceedFromAudioSelection, CanProceedFromConsent, CanProceedFromQuality (+13 more)
 
 ### Community 43 - "2. Screen Walkthrough & UI Reference"
 Cohesion: 0.13
 Nodes (14): 1. Executive Summary & Verification Matrix, 2. Screen Walkthrough & UI Reference, 3. 5-Hour Folder Endurance & UI Thread Responsiveness Benchmark, 4. Manual Verification Checklist, A. Voice Profile Enrollment, B. Scan Execution, Benchmark Results, C. Results & Waveform Timeline (+6 more)
 
-### Community 44 - "validate_test_directory"
-Cohesion: 0.19
-Nodes (11): get_repo_root(), Path, Locate the git repository root from current file., Validate that test split directory is strictly outside repository root., Discover audio clips per speaker from directory structure:…, Discover game audio noise clips., Deterministically partition speakers into dev and test sets with zero leakage., validate_test_directory() (+3 more)
+### Community 44 - "SyntheticDataGenerator"
+Cohesion: 0.15
+Nodes (13): get_repo_root(), Locate the git repository root from current file., Validate that test split directory is strictly outside repository root., Discover audio clips per speaker from directory structure:…, Discover game audio noise clips., Deterministically partition speakers into dev and test sets with zero leakage., SyntheticDataGenerator, validate_test_directory() (+5 more)
 
-### Community 45 - "FakeSession"
-Cohesion: 0.40
-Nodes (4): IAudioOutputSession, FakeSession, Disposed, HasExited
+### Community 45 - "AppLayerTests"
+Cohesion: 0.15
+Nodes (7): AudioQualityAnalyzer, AppServiceBootstrap, ProfileEnrollmentService, Fact, List, Task, AppLayerTests
 
 ### Community 46 - "VerdictFilter"
-Cohesion: 0.40
-Nodes (5): VerdictFilter, All, Match, NoMatch, Possible
+Cohesion: 0.33
+Nodes (6): VerdictFilter, All, Error, Match, NoMatch, Possible
 
-### Community 47 - "generator.py"
-Cohesion: 0.19
-Nodes (11): dataset_config.py — Configuration models and validation for synthetic data…, print_summary_table(), Any, generator.py — Synthetic test dataset generator for VoiceScan. Enforces: 1.…, Generate and print formatted summary table of generated synthetic clips., fixture, Path, test_generator.py — Integration tests for end-to-end dataset generation. (+3 more)
+### Community 47 - ".StreamDecodeAsync"
+Cohesion: 0.27
+Nodes (8): CancellationToken, IAsyncEnumerable, IReadOnlyList, Task, AudioDecoder, AudioTrackInfo, DecodedAudioChunk, Stream
 
 ### Community 48 - "AudioQualityReport"
-Cohesion: 0.36
+Cohesion: 0.31
 Nodes (6): IReadOnlyList, AudioQualityReport, CancellationToken, ReadOnlySpan, Task, IAudioQualityAnalyzer
 
-### Community 49 - "SyntheticDataGenerator"
-Cohesion: 0.27
-Nodes (8): main(), generate_dataset.py — CLI for synthetic audio dataset generation., DatasetConfig, Any, Path, SyntheticDataGenerator, test_speaker_split_zero_leakage(), test_split_determinism()
+### Community 49 - "generator.py"
+Cohesion: 0.22
+Nodes (10): main(), generate_dataset.py — CLI for synthetic audio dataset generation., DatasetConfig, Any, dataset_config.py — Configuration models and validation for synthetic data…, print_summary_table(), generator.py — Synthetic test dataset generator for VoiceScan. Enforces: 1.…, Generate and print formatted summary table of generated synthetic clips. (+2 more)
 
 ### Community 50 - "apply_degradation_chain"
 Cohesion: 0.26
 Nodes (12): apply_agc(), apply_bandlimit(), apply_degradation_chain(), apply_light_noise_suppression(), apply_opus_degradation(), ndarray, degradations.py — Degradation chains simulating gameplay voice chat…, Automatic Gain Control (AGC) dynamic compression simulation. (+4 more)
 
 ### Community 51 - "BaseScanner"
-Cohesion: 0.22
-Nodes (8): BaseScanner, __getattr__(), Any, Path, scanner_interface.py — Scanner invocation contracts and verification stubs.…, Execute scan across audio_dir. Returns: result_json: Dictionary adhering to…, Executes a command-line scanner binary or script conforming to the contract:…, SubprocessCliScanner
+Cohesion: 0.21
+Nodes (7): BaseScanner, __getattr__(), Any, scanner_interface.py — Scanner invocation contracts and verification stubs.…, Execute scan across audio_dir. Returns: result_json: Dictionary adhering to…, Executes a command-line scanner binary or script conforming to the contract:…, SubprocessCliScanner
 
-### Community 52 - "WebRtcVad"
-Cohesion: 0.16
-Nodes (8): IReadOnlyList, List, ProbabilityStream, ProbabilityStream, WebRtcVad, Mode, SettingsFingerprint, ReadOnlySpan
+### Community 52 - "MediaFileItem"
+Cohesion: 0.20
+Nodes (8): MediaFileItem, FileName, IsLoadingWaveform, IsWaveformVisible, Waveform, WaveformError, INotifyPropertyChanged, PropertyChangedEventArgs
 
-### Community 53 - ".List"
-Cohesion: 0.19
-Nodes (5): Action, IReadOnlyList, ProfileLibrary, CancellationToken, Task
+### Community 53 - "IAudioPlaybackController"
+Cohesion: 0.14
+Nodes (6): IAudioPlaybackController, CurrentFilePath, CurrentPositionSeconds, IsAudioAvailable, IsPlaying, TotalDurationSeconds
 
-### Community 54 - "MainAppViewModel"
-Cohesion: 0.13
-Nodes (14): MainAppViewModel, CurrentPage, Enrollment, GpuStatusMessage, IsDarkTheme, IsMicaBackdropEnabled, Results, Review (+6 more)
+### Community 54 - ".MergeAdjacentHits"
+Cohesion: 0.31
+Nodes (6): End, Confidence, IReadOnlyList, List, Start, SimilarityScorer
 
-### Community 55 - "ResultsView"
-Cohesion: 0.09
-Nodes (16): Control, IReadOnlyList, Task, FilePickers, RoutedEventArgs, EnrollmentWizardView, ViewModel, RoutedEventArgs (+8 more)
-
-### Community 56 - "ScanMetadata"
-Cohesion: 0.25
-Nodes (7): ScanMetadata, ElapsedSeconds, EngineVersion, ModelId, ProfileName, Threshold, Timestamp
+### Community 55 - "EnrollmentWizardView"
+Cohesion: 0.08
+Nodes (16): Control, DragEventArgs, IReadOnlyList, Task, FilePickers, DragEventArgs, RoutedEventArgs, EnrollmentWizardView (+8 more)
 
 ### Community 57 - "VoiceProfileSummary"
 Cohesion: 0.25
 Nodes (7): DateTimeOffset, AudioQualityTier, Acceptable, Excellent, Rejected, Warning, VoiceProfileSummary
 
-### Community 58 - "Filterbank"
-Cohesion: 0.14
-Nodes (10): Func, FbankProfile, CamPlusPlus, WeSpeaker, Filterbank, FbankProfile, First, InlineData (+2 more)
+### Community 58 - ".Collect"
+Cohesion: 0.25
+Nodes (5): IEnumerable, IReadOnlyList, MediaFileCollector, IEnumerable, StringComparer
 
-### Community 59 - "VoiceScanLogger"
-Cohesion: 0.36
-Nodes (3): VoiceScanLogger, LogFilePath, Exception
+### Community 59 - "UserSettingsStore"
+Cohesion: 0.07
+Nodes (25): ProfileLibrary, UserSettings, ClusterThreshold, LastBrowseFolder, LastProfilePath, UseClustering, UseTemporalSmoothing, UserSettingsStore (+17 more)
 
-### Community 60 - "FakeAudioOutput"
-Cohesion: 0.14
-Nodes (14): ResultSortColumn, Duration, FileName, HitCount, MaxConfidence, Verdict, FakeAudioOutput, IsAvailable (+6 more)
+### Community 60 - "CohortDocument"
+Cohesion: 0.20
+Nodes (7): List, CohortDocument, CohortSize, CreatedAt, Embeddings, ModelId, SchemaVersion
 
 ### Community 61 - "FileVerdictResult"
-Cohesion: 0.15
-Nodes (14): IReadOnlyList, FileVerdictResult, HitSegmentResult, WaveformEnvelope, IReadOnlyList, WaveformTimelineControl, Control, VoiceScan.App.Controls (+6 more)
+Cohesion: 0.18
+Nodes (12): IReadOnlyList, FileVerdictResult, IsError, HitSegmentResult, WaveformEnvelope, IReadOnlyList, WaveformTimelineControl, Envelope (+4 more)
 
 ### Community 62 - ".StartScanAsync"
-Cohesion: 0.26
-Nodes (7): CancellationToken, IReadOnlyList, ScoreNormalizer, Task, PipelineScanOptions, CancellationToken, Task
+Cohesion: 0.29
+Nodes (6): CancellationToken, IReadOnlyList, Task, PipelineScanOptions, CancellationToken, Task
 
 ### Community 63 - "VoiceScan Base Version Documentation"
 Cohesion: 0.13
 Nodes (14): 1. System Requirements & Prerequisites, 2.1 Build the Solution, 2.2 Run Unit & Integration Tests, 2.3 Run the CLI Engine, 2.4 Run the Desktop Application (Avalonia), 2. How to Build & Run, 3. Known Limitations & Edge Cases, 4. Model & Component Licenses Summary (+6 more)
 
-### Community 68 - ".ScanFileAsync"
-Cohesion: 0.24
-Nodes (12): CancellationToken, IReadOnlyList, ISpeakerEmbeddingModel, List, ScoreNormalizer, Task, VoiceProfile, PipelineScanner (+4 more)
+### Community 68 - "ScoreNormalizer"
+Cohesion: 0.40
+Nodes (4): ScoreNormalizer, CohortSize, Mean, StdDev
 
 ### Community 69 - ".generate_split"
-Cohesion: 0.40
-Nodes (3): ndarray, Load audio file converted to 16 kHz mono float32., Generate a complete synthetic split (dev or test) with enrollment and ground…
+Cohesion: 0.33
+Nodes (4): Any, ndarray, Load audio file converted to 16 kHz mono float32., Generate a complete synthetic split (dev or test) with enrollment and ground…
 
-### Community 70 - "mock_speaker_pool"
-Cohesion: 0.50
-Nodes (4): mock_speaker_pool(), fixture, Path, Create temporary directory structure for 10 speakers with 6 clips each.
+### Community 70 - ".ExtractWindows"
+Cohesion: 0.28
+Nodes (6): IReadOnlyList, SpeechAudioWindow, SpeechWindowExtractor, WindowPlan, SpeechInterval, WindowPlan
 
-### Community 71 - "VoiceScan.App.Core.ViewModels"
-Cohesion: 0.24
-Nodes (3): VoiceScan.App.Services, VoiceScan.App.Core.ViewModels, VoiceScan.App.Views
+### Community 71 - "EnrollmentSampleItem"
+Cohesion: 0.29
+Nodes (5): EnrollmentSampleItem, AnalysisError, IsAccepted, IsAnalyzing, Report
+
+### Community 72 - ".EnrollProfileAsync"
+Cohesion: 0.29
+Nodes (4): AudioAugmenter, CancellationToken, IReadOnlyList, Task
 
 ### Community 73 - "VoiceScan"
 Cohesion: 0.29
@@ -410,101 +408,117 @@ Nodes (6): Building from source, GPU, Install, Use, VoiceScan, Where things are 
 Cohesion: 0.29
 Nodes (6): EnrollmentStep, AudioSelection, Complete, ConsentVerification, ProfileCreation, QualityDiagnostics
 
-### Community 77 - "AppLayerTests"
-Cohesion: 0.25
-Nodes (6): AudioQualityAnalyzer, Fact, List, Task, AppLayerTests, ReviewSqliteRepository
+### Community 77 - "ScanExecutionState"
+Cohesion: 0.12
+Nodes (12): TimeSpan, OverallScanProgress, ScanExecutionState, Cancelled, Completed, Failed, Idle, Paused (+4 more)
 
-### Community 78 - ".StreamDecodeAsync"
-Cohesion: 0.26
-Nodes (8): CancellationToken, IReadOnlyList, Task, AudioDecoder, AudioTrackInfo, DecodedAudioChunk, IAsyncEnumerable, Stream
+### Community 78 - ".HandleScanCommandAsync"
+Cohesion: 0.29
+Nodes (3): Task, Program, JsonSerializerOptions
 
-### Community 79 - "ReviewView"
+### Community 79 - "BackgroundScanController"
+Cohesion: 0.22
+Nodes (6): CancellationTokenSource, ManualResetEventSlim, Stopwatch, BackgroundScanController, CurrentProgress, CurrentState
+
+### Community 80 - ".ScanFileAsync"
+Cohesion: 0.22
+Nodes (10): Action, CancellationToken, Exception, List, Task, PipelineScanner, EmbeddingModel, Vad (+2 more)
+
+### Community 81 - "ScanMetadata"
+Cohesion: 0.29
+Nodes (7): ScanMetadata, ElapsedSeconds, EngineVersion, ModelId, ProfileName, Threshold, Timestamp
+
+### Community 82 - "ResultSortColumn"
+Cohesion: 0.33
+Nodes (6): ResultSortColumn, Duration, FileName, HitCount, MaxConfidence, Verdict
+
+### Community 83 - "Filterbank"
+Cohesion: 0.16
+Nodes (9): Func, FbankProfile, CamPlusPlus, WeSpeaker, Filterbank, First, InlineData, Theory (+1 more)
+
+### Community 84 - "ResultsView"
+Cohesion: 0.24
+Nodes (5): RoutedEventArgs, ResultsView, ViewModel, SelectionChangedEventArgs, UserControl
+
+### Community 85 - ".List"
+Cohesion: 0.21
+Nodes (9): IReadOnlyList, CancellationToken, Func, IAsyncEnumerable, IReadOnlyList, Task, Fact, Task (+1 more)
+
+### Community 86 - ".ExportReportAsync"
+Cohesion: 0.27
+Nodes (8): CancellationToken, DateTimeOffset, IReadOnlyList, Task, EvidenceReportExporter, ExportResult, PdfRow, ReportExportSettings
+
+### Community 87 - "GpuUtilizationSampler"
+Cohesion: 0.21
+Nodes (6): CancellationToken, CancellationTokenSource, Task, TimeSpan, GpuUtilizationSampler, Latest
+
+### Community 88 - ".AddSamplesAsync"
+Cohesion: 0.36
+Nodes (4): CancellationToken, IEnumerable, IReadOnlyList, Task
+
+### Community 89 - ".DrawLabel"
+Cohesion: 0.38
+Nodes (4): DrawingContext, FontWeight, IBrush, Point
+
+### Community 90 - "ReviewView"
 Cohesion: 0.47
 Nodes (3): RoutedEventArgs, ReviewView, ViewModel
 
-### Community 80 - ".ExtractWindows"
-Cohesion: 0.28
-Nodes (6): IReadOnlyList, SpeechAudioWindow, SpeechWindowExtractor, WindowPlan, SpeechInterval, WindowPlan
+### Community 92 - "AppPaths"
+Cohesion: 0.13
+Nodes (10): AppPaths, DatabasePath, DataRoot, ModelsDirectory, ProfilesDirectory, ModelIntegrity, Fact, Task (+2 more)
 
-### Community 81 - ".HandleScanCommandAsync"
-Cohesion: 0.35
-Nodes (4): ISpeakerEmbeddingModel, Task, VoiceProfile, Program
-
-### Community 82 - ".ExportReportAsync"
-Cohesion: 0.29
-Nodes (8): CancellationToken, IReadOnlyList, Task, EvidenceReportExporter, ExportResult, PdfRow, ReportExportSettings, DateTimeOffset
-
-### Community 83 - "App"
+### Community 93 - "VoiceProfile"
 Cohesion: 0.18
-Nodes (6): App, STAThread, Program, AppBuilder, Application, VoiceScan.App
-
-### Community 84 - "OnnxEmbeddingModel"
-Cohesion: 0.17
-Nodes (9): FbankProfile, InferenceSession, IReadOnlyList, OnnxEmbeddingModel, ActiveProvider, EmbeddingDimension, IsCudaActive, ModelId (+1 more)
-
-### Community 85 - "VoiceProfile"
-Cohesion: 0.17
 Nodes (10): List, VoiceProfile, Centroid, ClipCount, CreatedAt, EnrollmentEmbeddings, ModelId, ProfileName (+2 more)
 
-### Community 86 - ".CreateMainViewModel"
-Cohesion: 0.31
-Nodes (4): AppServiceBootstrap, RoutedEventArgs, SetupWindow, IClassicDesktopStyleApplicationLifetime
+### Community 94 - "CachedWindow"
+Cohesion: 0.38
+Nodes (6): IReadOnlyList, CachedFileInfo, CachedScan, CachedWindow, CacheStats, StoredProfileInfo
 
-### Community 87 - "SileroVad"
-Cohesion: 0.29
-Nodes (5): ProfileEnrollmentService, IReadOnlyList, ProbabilityStream, SileroVad, SettingsFingerprint
+### Community 95 - "DetectedSegment"
+Cohesion: 0.33
+Nodes (6): DetectedSegment, Embedding, EndTimeSeconds, ReasonFlags, StartTimeSeconds, Verdict
 
-### Community 88 - "ScanExecutionState"
-Cohesion: 0.22
-Nodes (9): OverallScanProgress, ScanExecutionState, Cancelled, Completed, Failed, Idle, Paused, Scanning (+1 more)
+### Community 96 - "FakeAudioOutput"
+Cohesion: 0.33
+Nodes (6): Start, FakeAudioOutput, IsAvailable, Sessions, Starts, FakeSession
 
-### Community 89 - ".MissingModels"
-Cohesion: 0.27
-Nodes (3): IReadOnlyList, SetupCheck, FfmpegInstallHint
-
-### Community 90 - ".EnrollProfileAsync"
-Cohesion: 0.29
-Nodes (4): AudioAugmenter, CancellationToken, IReadOnlyList, Task
-
-### Community 91 - "VoiceScan.Core.Storage"
-Cohesion: 0.22
-Nodes (4): VoiceScan.Core.Storage, CachedWindow, CacheStats, StoredProfileInfo
-
-### Community 92 - "LogLevel"
-Cohesion: 0.25
-Nodes (7): VoiceScan.Core.Logging, LogLevel, Debug, Error, Fatal, Info, Warn
-
-### Community 93 - "AppPaths"
-Cohesion: 0.25
-Nodes (5): AppPaths, DatabasePath, DataRoot, ModelsDirectory, ProfilesDirectory
-
-### Community 94 - "VerdictConverters"
+### Community 97 - ".ExportReportAsync"
 Cohesion: 0.50
-Nodes (3): VerdictConverters, Color, IValueConverter
+Nodes (3): CancellationToken, Task, ExportSettingsProvider
 
-### Community 95 - ".StreamDecode_MultiHourAudio_BoundedMemoryUsage"
-Cohesion: 0.50
-Nodes (3): Fact, Task, StreamingMemoryTests
+### Community 98 - ".ScoreAndAggregate"
+Cohesion: 0.40
+Nodes (4): IReadOnlyList, MaxConfidence, Segments, Verdict
+
+### Community 99 - "synthetic_speech_and_game_dirs"
+Cohesion: 0.67
+Nodes (3): fixture, Create miniature clean speech clips and game audio clips., synthetic_speech_and_game_dirs()
+
+### Community 100 - "mock_speaker_pool"
+Cohesion: 0.67
+Nodes (3): mock_speaker_pool(), fixture, Create temporary directory structure for 10 speakers with 6 clips each.
 
 ## Knowledge Gaps
-- **349 isolated node(s):** `All`, `Match`, `Possible`, `NoMatch`, `FileName` (+344 more)
-  These have ≤1 connection - possible missing edges or undocumented components. (Counts symbols only; 581 node(s) total have ≤1 connection when file, concept and rationale nodes are included.)
-- **16 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
+- **375 isolated node(s):** `AudioSelection`, `ConsentVerification`, `QualityDiagnostics`, `ProfileCreation`, `Complete` (+370 more)
+  These have ≤1 connection - possible missing edges or undocumented components. (Counts symbols only; 610 node(s) total have ≤1 connection when file, concept and rationale nodes are included.)
+- **10 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
 
 ## Suggested Questions
 _Questions this graph is uniquely positioned to answer:_
 
-- **Why does `VoiceScan.Core` connect `VoiceScan.Core` to `WindowItem`, `DetectedSegment`, `ScoreNormalizer`, `SpooledAudio`, `IDisposable`, `.LoadAndRunSample`, `WebRtcVad`, `ScanMetadata`, `Filterbank`, `FileVerdictResult`, `VoiceScan.App.Core.ViewModels`, `.EstimateSnrDb`, `.StreamDecodeAsync`, `.ExtractWindows`, `App`, `OnnxEmbeddingModel`, `VoiceProfile`, `.MissingModels`, `.EnrollProfileAsync`, `VoiceScan.Core.Storage`, `AppPaths`?**
-  _High betweenness centrality (0.083) - this node is a cross-community bridge._
-- **Why does `ScanDashboardViewModel` connect `ScanDashboardViewModel` to `BackgroundScanController`, `VoiceScan.Core`, `MainAppViewModel`, `.StartScanAsync`, `ScanExecutionState`, `VoiceProfileSummary`, `.CreateMainViewModel`, `ResultsView`, `FileVerdictResult`, `InstallActions`?**
-  _High betweenness centrality (0.072) - this node is a cross-community bridge._
-- **Why does `EnrollmentWizardViewModel` connect `EnrollmentWizardViewModel` to `VoiceScan.App.Core.ViewModels`, `EnrollmentStep`, `AudioQualityReport`, `.List`, `MainAppViewModel`, `SileroVad`, `.CreateMainViewModel`, `VoiceProfileSummary`, `ResultsView`?**
-  _High betweenness centrality (0.050) - this node is a cross-community bridge._
-- **What connects `All`, `Match`, `Possible` to the rest of the system?**
-  _349 weakly-connected nodes found - possible documentation gaps or missing edges._
-- **Should `VoiceScan.Avalonia.csproj` be split into smaller, more focused modules?**
-  _Cohesion score 0.07956989247311828 - nodes in this community are weakly interconnected._
-- **Should `VoiceScan System Design` be split into smaller, more focused modules?**
-  _Cohesion score 0.13333333333333333 - nodes in this community are weakly interconnected._
-- **Should `VoiceScan: 10 Agent Prompts (concept → base version)` be split into smaller, more focused modules?**
-  _Cohesion score 0.14285714285714285 - nodes in this community are weakly interconnected._
+- **Why does `Path` connect `baseline_experiment.py` to `FakeAudioOutput`, `.scan`, `SyntheticDataGenerator`, `BaseScanner`, `MediaFileItem`, `real_speech_eval.py`, `EvaluationCoordinator`, `harness/__init__.py`?**
+  _High betweenness centrality (0.225) - this node is a cross-community bridge._
+- **Why does `MediaFileItem` connect `MediaFileItem` to `IWaveformService`, `EnrollmentSampleItem`, `ScanDashboardViewModel`, `BulkFileTests`, `.AddSamplesAsync`, `.Collect`, `FileVerdictResult`, `.StartScanAsync`, `baseline_experiment.py`?**
+  _High betweenness centrality (0.162) - this node is a cross-community bridge._
+- **Why does `ScanDashboardViewModel` connect `ScanDashboardViewModel` to `IWaveformService`, `IBackgroundScanController`, `ScanExecutionState`, `AppLayerTests`, `MainAppViewModel`, `MediaFileItem`, `VoiceScan.Core`, `BulkFileTests`, `EnrollmentWizardView`, `.StartScanAsync`, `VoiceProfileSummary`, `.Collect`, `UserSettingsStore`, `FileVerdictResult`, `InstallActions`?**
+  _High betweenness centrality (0.145) - this node is a cross-community bridge._
+- **Are the 4 inferred relationships involving `EnrollmentWizardViewModel` (e.g. with `.CreateMainViewModel()` and `.EnrollmentWizard_DeleteSelectedProfile_RemovesFileAndRaisesEvent()`) actually correct?**
+  _`EnrollmentWizardViewModel` has 4 INFERRED edges - model-reasoned connections that need verification._
+- **Are the 2 inferred relationships involving `ScanDashboardViewModel` (e.g. with `.CreateMainViewModel()` and `.ScanDashboard_AddPaths_AccumulatesWithoutDuplicates_AndRemoves()`) actually correct?**
+  _`ScanDashboardViewModel` has 2 INFERRED edges - model-reasoned connections that need verification._
+- **Are the 3 inferred relationships involving `ResultsViewModel` (e.g. with `.CreateMainViewModel()` and `.ResultsViewModel_ExportReport_WritesCsvAndPdf()`) actually correct?**
+  _`ResultsViewModel` has 3 INFERRED edges - model-reasoned connections that need verification._
+- **Are the 5 inferred relationships involving `VoiceScanDatabase` (e.g. with `.CreateMainViewModel()` and `.Database_CacheKeepsDurationAndWaveformAndRescanReplacesResult()`) actually correct?**
+  _`VoiceScanDatabase` has 5 INFERRED edges - model-reasoned connections that need verification._
