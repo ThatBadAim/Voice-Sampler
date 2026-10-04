@@ -107,6 +107,22 @@ public partial class ResultsView : UserControl
 
     private void PlayPause_Click(object? sender, RoutedEventArgs e) => ViewModel?.PlayPause();
 
+    private void PlaySelectedSegment_Click(object? sender, RoutedEventArgs e)
+    {
+        if (ViewModel?.SelectedSegment is { } seg)
+        {
+            ViewModel.PlayHitSegment(seg);
+        }
+    }
+
+    private void ScrubToSegmentStart_Click(object? sender, RoutedEventArgs e)
+    {
+        if (ViewModel?.SelectedSegment is { } seg)
+        {
+            ViewModel.SeekToSegment(seg);
+        }
+    }
+
     private void Segments_SelectionChanged(object? sender, SelectionChangedEventArgs e)
     {
         if (e.AddedItems.Count > 0 && e.AddedItems[0] is HitSegmentResult segment)

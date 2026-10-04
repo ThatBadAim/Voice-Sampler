@@ -13,16 +13,47 @@ public sealed class ReviewViewModel : INotifyPropertyChanged
     private readonly IReviewRepository _reviewRepository;
     private readonly IAudioPlaybackController _playbackController;
 
+    private readonly List<ReviewQueueItem> _allPendingItems = [];
     private ReviewQueueItem? _selectedItem;
     private string _reviewerNotes = string.Empty;
     private bool _addToProfileOnConfirm = true;
     private string? _statusMessage;
     private bool _isProcessing;
+    private string _selectedSegmentFilterMode = "All Segments";
+    private string _selectedSpeaker = "All Speakers";
 
     public event PropertyChangedEventHandler? PropertyChanged;
 
+    public static readonly IReadOnlyList<string> SegmentFilterModes = ["All Segments", "Offensive / Flagged Only"];
+
     public ObservableCollection<ReviewQueueItem> PendingQueue { get; } = [];
+    public ObservableCollection<ReviewQueueItem> FilteredQueue => PendingQueue;
+    public ObservableCollection<string> AvailableSpeakers { get; } = ["All Speakers"];
     public ObservableCollection<ReviewDecisionRecord> DecisionHistory { get; } = [];
+
+    public string SelectedSegmentFilterMode
+    {
+        get => _selectedSegmentFilterMode;
+        set
+        {
+            if (SetField(ref _selectedSegmentFilterMode, value))
+            {
+                ApplyFilter();
+            }
+        }
+    }
+
+    public string SelectedSpeaker
+    {
+        get => _selectedSpeaker;
+        set
+        {
+            if (SetField(ref _selectedSpeaker, value))
+            {
+                ApplyFilter();
+            }
+        }
+    }
 
     public ReviewQueueItem? SelectedItem
     {
@@ -39,9 +70,20 @@ public sealed class ReviewViewModel : INotifyPropertyChanged
                 ReviewerNotes = string.Empty;
                 OnPropertyChanged(nameof(HasSelectedItem));
                 OnPropertyChanged(nameof(CanPlaySnippet));
+                OnPropertyChanged(nameof(SpeakerLabel));
+                OnPropertyChanged(nameof(Transcript));
+                OnPropertyChanged(nameof(IsFlagged));
+                OnPropertyChanged(nameof(IsOffensive));
+                OnPropertyChanged(nameof(ModerationViolations));
             }
         }
     }
+
+    public string? SpeakerLabel => _selectedItem?.SpeakerLabel;
+    public string? Transcript => _selectedItem?.Transcript;
+    public bool IsFlagged => _selectedItem?.IsFlagged ?? false;
+    public bool IsOffensive => _selectedItem?.IsOffensive ?? false;
+    public IReadOnlyList<string>? ModerationViolations => _selectedItem?.ModerationViolations;
 
     public string ReviewerNotes
     {
@@ -94,7 +136,7 @@ public sealed class ReviewViewModel : INotifyPropertyChanged
     {
         foreach (var seg in segments)
         {
-            PendingQueue.Add(new ReviewQueueItem(
+            _allPendingItems.Add(new ReviewQueueItem(
                 Segment: seg,
                 FileName: fileName,
                 ProfileName: profileName,
@@ -102,10 +144,8 @@ public sealed class ReviewViewModel : INotifyPropertyChanged
                 ProfilePath: profilePath));
         }
 
-        if (SelectedItem == null && PendingQueue.Count > 0)
-        {
-            SelectedItem = PendingQueue[0];
-        }
+        UpdateAvailableSpeakers();
+        ApplyFilter();
     }
 
     public void PlaySelectedSnippet()
@@ -139,8 +179,9 @@ public sealed class ReviewViewModel : INotifyPropertyChanged
                     : $" Not added to voice '{item.ProfileName}': its profile file is missing or the segment has no usable embedding.";
             }
 
-            PendingQueue.Remove(item);
-            SelectedItem = PendingQueue.FirstOrDefault();
+            _allPendingItems.Remove(item);
+            UpdateAvailableSpeakers();
+            ApplyFilter();
             await RefreshHistoryAsync(cancellationToken);
             StatusMessage = $"Confirmed segment [{item.Segment.StartTimeSeconds:F1}s - {item.Segment.EndTimeSeconds:F1}s].{profileNote}";
         }
@@ -166,8 +207,9 @@ public sealed class ReviewViewModel : INotifyPropertyChanged
         {
             var decisionRecord = await Task.Run(() => CreateDecisionRecord(item, ReviewDecision.Rejected), cancellationToken);
             await _reviewRepository.RecordDecisionAsync(decisionRecord, cancellationToken);
-            PendingQueue.Remove(item);
-            SelectedItem = PendingQueue.FirstOrDefault();
+            _allPendingItems.Remove(item);
+            UpdateAvailableSpeakers();
+            ApplyFilter();
             await RefreshHistoryAsync(cancellationToken);
             StatusMessage = $"Rejected segment [{item.Segment.StartTimeSeconds:F1}s - {item.Segment.EndTimeSeconds:F1}s].";
         }
@@ -178,6 +220,68 @@ public sealed class ReviewViewModel : INotifyPropertyChanged
         finally
         {
             IsProcessing = false;
+        }
+    }
+
+    public void SeekToSelectedStart()
+    {
+        if (_selectedItem != null)
+        {
+            _playbackController.SeekTo(_selectedItem.Segment.Start);
+        }
+    }
+
+    private void UpdateAvailableSpeakers()
+    {
+        var currentSpeaker = _selectedSpeaker;
+        AvailableSpeakers.Clear();
+        AvailableSpeakers.Add("All Speakers");
+
+        var distinct = _allPendingItems
+            .Select(i => i.SpeakerLabel)
+            .Where(s => !string.IsNullOrWhiteSpace(s))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(s => s);
+
+        foreach (var spk in distinct)
+        {
+            AvailableSpeakers.Add(spk!);
+        }
+
+        if (!AvailableSpeakers.Contains(currentSpeaker))
+        {
+            _selectedSpeaker = "All Speakers";
+            OnPropertyChanged(nameof(SelectedSpeaker));
+        }
+    }
+
+    private void ApplyFilter()
+    {
+        IEnumerable<ReviewQueueItem> query = _allPendingItems;
+        if (string.Equals(_selectedSegmentFilterMode, "Offensive / Flagged Only", StringComparison.OrdinalIgnoreCase))
+        {
+            query = query.Where(i => i.IsFlagged);
+        }
+
+        if (!string.Equals(_selectedSpeaker, "All Speakers", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrWhiteSpace(_selectedSpeaker))
+        {
+            query = query.Where(i => string.Equals(i.SpeakerLabel, _selectedSpeaker, StringComparison.OrdinalIgnoreCase));
+        }
+
+        var list = query.ToList();
+        PendingQueue.Clear();
+        foreach (var item in list)
+        {
+            PendingQueue.Add(item);
+        }
+
+        if (SelectedItem != null && !PendingQueue.Contains(SelectedItem))
+        {
+            SelectedItem = PendingQueue.FirstOrDefault();
+        }
+        else if (SelectedItem == null && PendingQueue.Count > 0)
+        {
+            SelectedItem = PendingQueue[0];
         }
     }
 

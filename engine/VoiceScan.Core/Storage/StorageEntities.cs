@@ -30,3 +30,20 @@ public record CacheStats(
     int TotalProfiles,
     int TotalScanResults,
     long DatabaseSizeBytes);
+
+public record StoredScanResult(
+    long Id,
+    string FilePath,
+    string FileHash,
+    string ProfileName,
+    string ModelId,
+    double Threshold,
+    string Verdict,
+    double MaxConfidence,
+    string SegmentsJson,
+    string ScannedAt,
+    string? SpeakerLabel = null,
+    string? Transcript = null,
+    bool IsOffensive = false,
+    IReadOnlyList<string>? ModerationViolations = null);
+

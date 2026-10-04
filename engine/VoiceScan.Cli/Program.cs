@@ -698,7 +698,11 @@ public static class Program
                 Confidence: s.Confidence,
                 ReasonFlags: s.ReasonFlags,
                 SegmentEmbedding: s.Embedding,
-                FileHash: f.FileHash)).ToList())).ToList();
+                FileHash: f.FileHash,
+                SpeakerLabel: s.SpeakerLabel,
+                Transcript: s.Transcript,
+                IsOffensive: s.IsOffensive,
+                ModerationViolations: s.ModerationViolations)).ToList())).ToList();
 
         var exportResult = await new EvidenceReportExporter().ExportReportAsync(fileResults, exportSettings, outputDir);
         Console.WriteLine($"[EXPORT] Evidence report generated in: {outputDir}");

@@ -15,6 +15,8 @@ using Microsoft.Data.Sqlite;
 /// </summary>
 public sealed class VoiceScanDatabase : IDisposable
 {
+    public const string SchemaVersion = "1.1.0";
+
     private readonly string _connectionString;
     private readonly string _dbFilePath;
 
@@ -207,6 +209,23 @@ public sealed class VoiceScanDatabase : IDisposable
                 ALTER TABLE profiles ADD COLUMN model_fingerprint TEXT NOT NULL DEFAULT '';
                 INSERT INTO schema_migrations (version, applied_at, description)
                 VALUES (4, datetime('now'), 'Model fingerprint on profiles; drop embeddings from the old front-end');
+            ";
+            await cmd.ExecuteNonQueryAsync(cancellationToken);
+            await tx.CommitAsync(cancellationToken);
+        }
+
+        if (currentVersion < 5)
+        {
+            using var tx = connection.BeginTransaction();
+            using var cmd = connection.CreateCommand();
+            cmd.Transaction = tx;
+            cmd.CommandText = @"
+                ALTER TABLE scan_results ADD COLUMN speaker_label TEXT;
+                ALTER TABLE scan_results ADD COLUMN transcript TEXT;
+                ALTER TABLE scan_results ADD COLUMN is_offensive INTEGER DEFAULT 0;
+                ALTER TABLE scan_results ADD COLUMN moderation_violations TEXT;
+                INSERT INTO schema_migrations (version, applied_at, description)
+                VALUES (5, datetime('now'), 'SchemaVersion 1.1.0: Add speaker_label, transcript, is_offensive, and moderation_violations to scan_results');
             ";
             await cmd.ExecuteNonQueryAsync(cancellationToken);
             await tx.CommitAsync(cancellationToken);
@@ -564,6 +583,49 @@ public sealed class VoiceScanDatabase : IDisposable
 
     #region Scan Results Persistence
 
+    public Task SaveScanResultAsync(
+        string filePath,
+        string fileHash,
+        string profileName,
+        string modelId,
+        double threshold,
+        string verdict,
+        double maxConfidence,
+        string segmentsJson,
+        CancellationToken cancellationToken = default) =>
+        SaveScanResultAsync(
+            filePath,
+            fileHash,
+            profileName,
+            modelId,
+            threshold,
+            verdict,
+            maxConfidence,
+            segmentsJson,
+            speakerLabel: null,
+            transcript: null,
+            isOffensive: false,
+            moderationViolations: null,
+            cancellationToken: cancellationToken);
+
+    public Task SaveScanResultAsync(
+        StoredScanResult result,
+        CancellationToken cancellationToken = default) =>
+        SaveScanResultAsync(
+            result.FilePath,
+            result.FileHash,
+            result.ProfileName,
+            result.ModelId,
+            result.Threshold,
+            result.Verdict,
+            result.MaxConfidence,
+            result.SegmentsJson,
+            result.SpeakerLabel,
+            result.Transcript,
+            result.IsOffensive,
+            result.ModerationViolations,
+            cancellationToken);
+
     public async Task SaveScanResultAsync(
         string filePath,
         string fileHash,
@@ -573,6 +635,10 @@ public sealed class VoiceScanDatabase : IDisposable
         string verdict,
         double maxConfidence,
         string segmentsJson,
+        string? speakerLabel,
+        string? transcript = null,
+        bool isOffensive = false,
+        IReadOnlyList<string>? moderationViolations = null,
         CancellationToken cancellationToken = default)
     {
         await EnsureInitializedAsync(cancellationToken);
@@ -586,8 +652,14 @@ public sealed class VoiceScanDatabase : IDisposable
         cmd.CommandText = @"
             DELETE FROM scan_results
             WHERE file_hash = @fhash AND profile_name = @prof AND model_id = @model AND threshold = @thresh;
-            INSERT INTO scan_results (file_path, file_hash, profile_name, model_id, threshold, verdict, max_confidence, segments_json, scanned_at)
-            VALUES (@path, @fhash, @prof, @model, @thresh, @verdict, @maxconf, @segjson, datetime('now'));";
+            INSERT INTO scan_results (
+                file_path, file_hash, profile_name, model_id, threshold, verdict, max_confidence,
+                segments_json, scanned_at, speaker_label, transcript, is_offensive, moderation_violations
+            )
+            VALUES (
+                @path, @fhash, @prof, @model, @thresh, @verdict, @maxconf,
+                @segjson, datetime('now'), @speaker, @transcript, @is_offensive, @mod_violations
+            );";
 
         cmd.Parameters.AddWithValue("@path", filePath);
         cmd.Parameters.AddWithValue("@fhash", fileHash);
@@ -597,9 +669,145 @@ public sealed class VoiceScanDatabase : IDisposable
         cmd.Parameters.AddWithValue("@verdict", verdict);
         cmd.Parameters.AddWithValue("@maxconf", maxConfidence);
         cmd.Parameters.AddWithValue("@segjson", segmentsJson);
+        cmd.Parameters.AddWithValue("@speaker", (object?)speakerLabel ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("@transcript", (object?)transcript ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("@is_offensive", isOffensive ? 1 : 0);
+        cmd.Parameters.AddWithValue(
+            "@mod_violations",
+            moderationViolations != null ? JsonSerializer.Serialize(moderationViolations) : DBNull.Value);
 
         await cmd.ExecuteNonQueryAsync(cancellationToken);
         await tx.CommitAsync(cancellationToken);
+    }
+
+    public async Task<StoredScanResult?> GetScanResultAsync(
+        string fileHash,
+        string profileName,
+        string modelId,
+        double threshold,
+        CancellationToken cancellationToken = default)
+    {
+        await EnsureInitializedAsync(cancellationToken);
+        using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync(cancellationToken);
+
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = @"
+            SELECT id, file_path, file_hash, profile_name, model_id, threshold, verdict, max_confidence,
+                   segments_json, scanned_at, speaker_label, transcript, is_offensive, moderation_violations
+            FROM scan_results
+            WHERE file_hash = @fhash AND profile_name = @prof AND model_id = @model AND threshold = @thresh
+            LIMIT 1;";
+
+        cmd.Parameters.AddWithValue("@fhash", fileHash);
+        cmd.Parameters.AddWithValue("@prof", profileName);
+        cmd.Parameters.AddWithValue("@model", modelId);
+        cmd.Parameters.AddWithValue("@thresh", threshold);
+
+        using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
+        if (!await reader.ReadAsync(cancellationToken))
+        {
+            return null;
+        }
+
+        return ReadStoredScanResult(reader);
+    }
+
+    public async Task<IReadOnlyList<StoredScanResult>> GetScanResultsAsync(
+        string? fileHash = null,
+        string? profileName = null,
+        CancellationToken cancellationToken = default)
+    {
+        await EnsureInitializedAsync(cancellationToken);
+        using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync(cancellationToken);
+
+        using var cmd = connection.CreateCommand();
+        var sb = new StringBuilder(@"
+            SELECT id, file_path, file_hash, profile_name, model_id, threshold, verdict, max_confidence,
+                   segments_json, scanned_at, speaker_label, transcript, is_offensive, moderation_violations
+            FROM scan_results");
+
+        var conditions = new List<string>();
+        if (!string.IsNullOrEmpty(fileHash))
+        {
+            conditions.Add("file_hash = @fhash");
+            cmd.Parameters.AddWithValue("@fhash", fileHash);
+        }
+        if (!string.IsNullOrEmpty(profileName))
+        {
+            conditions.Add("profile_name = @prof");
+            cmd.Parameters.AddWithValue("@prof", profileName);
+        }
+
+        if (conditions.Count > 0)
+        {
+            sb.Append(" WHERE ");
+            sb.Append(string.Join(" AND ", conditions));
+        }
+
+        sb.Append(" ORDER BY id DESC;");
+        cmd.CommandText = sb.ToString();
+
+        var results = new List<StoredScanResult>();
+        using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            results.Add(ReadStoredScanResult(reader));
+        }
+
+        return results;
+    }
+
+    private static StoredScanResult ReadStoredScanResult(SqliteDataReader reader)
+    {
+        long id = reader.GetInt64(0);
+        string filePath = reader.GetString(1);
+        string fileHash = reader.GetString(2);
+        string profileName = reader.GetString(3);
+        string modelId = reader.GetString(4);
+        double threshold = reader.GetDouble(5);
+        string verdict = reader.GetString(6);
+        double maxConfidence = reader.GetDouble(7);
+        string segmentsJson = reader.GetString(8);
+        string scannedAt = reader.GetString(9);
+
+        string? speakerLabel = reader.IsDBNull(10) ? null : reader.GetString(10);
+        string? transcript = reader.IsDBNull(11) ? null : reader.GetString(11);
+        bool isOffensive = !reader.IsDBNull(12) && reader.GetInt64(12) != 0;
+
+        IReadOnlyList<string>? moderationViolations = null;
+        if (!reader.IsDBNull(13))
+        {
+            string modJson = reader.GetString(13);
+            if (!string.IsNullOrWhiteSpace(modJson))
+            {
+                try
+                {
+                    moderationViolations = JsonSerializer.Deserialize<List<string>>(modJson);
+                }
+                catch
+                {
+                    moderationViolations = Array.Empty<string>();
+                }
+            }
+        }
+
+        return new StoredScanResult(
+            id,
+            filePath,
+            fileHash,
+            profileName,
+            modelId,
+            threshold,
+            verdict,
+            maxConfidence,
+            segmentsJson,
+            scannedAt,
+            speakerLabel,
+            transcript,
+            isOffensive,
+            moderationViolations ?? Array.Empty<string>());
     }
 
     #endregion

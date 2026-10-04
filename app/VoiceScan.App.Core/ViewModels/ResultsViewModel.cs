@@ -76,6 +76,38 @@ public sealed class ResultsViewModel : INotifyPropertyChanged
         }
     }
 
+    private string _selectedSegmentFilterMode = "All Segments";
+    private string _selectedSpeaker = "All Speakers";
+
+    public static readonly IReadOnlyList<string> SegmentFilterModes = ["All Segments", "Offensive / Flagged Only"];
+
+    public ObservableCollection<HitSegmentResult> FilteredSegments { get; } = [];
+    public ObservableCollection<string> AvailableSpeakers { get; } = ["All Speakers"];
+
+    public string SelectedSegmentFilterMode
+    {
+        get => _selectedSegmentFilterMode;
+        set
+        {
+            if (SetField(ref _selectedSegmentFilterMode, value))
+            {
+                ApplySegmentFilter();
+            }
+        }
+    }
+
+    public string SelectedSpeaker
+    {
+        get => _selectedSpeaker;
+        set
+        {
+            if (SetField(ref _selectedSpeaker, value))
+            {
+                ApplySegmentFilter();
+            }
+        }
+    }
+
     public FileVerdictResult? SelectedFile
     {
         get => _selectedFile;
@@ -88,8 +120,9 @@ public sealed class ResultsViewModel : INotifyPropertyChanged
                 if (value != null)
                 {
                     _playbackController.LoadFile(value.FilePath, value.DurationSeconds);
-                    SelectedSegment = value.Segments.FirstOrDefault();
                 }
+                UpdateAvailableSpeakers();
+                ApplySegmentFilter();
                 OnPropertyChanged(nameof(HasSelectedFile));
             }
         }
@@ -98,8 +131,26 @@ public sealed class ResultsViewModel : INotifyPropertyChanged
     public HitSegmentResult? SelectedSegment
     {
         get => _selectedSegment;
-        set => SetField(ref _selectedSegment, value);
+        set
+        {
+            if (SetField(ref _selectedSegment, value))
+            {
+                OnPropertyChanged(nameof(SpeakerLabel));
+                OnPropertyChanged(nameof(Transcript));
+                OnPropertyChanged(nameof(IsFlagged));
+                OnPropertyChanged(nameof(IsOffensive));
+                OnPropertyChanged(nameof(ModerationViolations));
+                OnPropertyChanged(nameof(HasSelectedSegment));
+            }
+        }
     }
+
+    public string? SpeakerLabel => _selectedSegment?.SpeakerLabel;
+    public string? Transcript => _selectedSegment?.Transcript;
+    public bool IsFlagged => _selectedSegment?.IsFlagged ?? false;
+    public bool IsOffensive => _selectedSegment?.IsOffensive ?? false;
+    public IReadOnlyList<string>? ModerationViolations => _selectedSegment?.ModerationViolations;
+    public bool HasSelectedSegment => _selectedSegment != null;
 
     public double PlaybackPosition
     {
@@ -221,6 +272,12 @@ public sealed class ResultsViewModel : INotifyPropertyChanged
         _playbackController.PlaySegment(segment.StartTimeSeconds, segment.EndTimeSeconds);
     }
 
+    public void SeekToSegment(HitSegmentResult segment)
+    {
+        SelectedSegment = segment;
+        _playbackController.SeekTo(segment.Start);
+    }
+
     private void ApplyFilterAndSort()
     {
         IEnumerable<FileVerdictResult> query = _allResults;
@@ -273,6 +330,68 @@ public sealed class ResultsViewModel : INotifyPropertyChanged
         else
         {
             OnPropertyChanged(nameof(SelectedFile)); // re-select the kept item in the rebuilt list
+        }
+    }
+
+    private void UpdateAvailableSpeakers()
+    {
+        var currentSpeaker = _selectedSpeaker;
+        AvailableSpeakers.Clear();
+        AvailableSpeakers.Add("All Speakers");
+
+        if (_selectedFile != null)
+        {
+            var distinct = _selectedFile.Segments
+                .Select(s => s.SpeakerLabel)
+                .Where(s => !string.IsNullOrWhiteSpace(s))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .OrderBy(s => s);
+
+            foreach (var spk in distinct)
+            {
+                AvailableSpeakers.Add(spk!);
+            }
+        }
+
+        if (!AvailableSpeakers.Contains(currentSpeaker))
+        {
+            _selectedSpeaker = "All Speakers";
+            OnPropertyChanged(nameof(SelectedSpeaker));
+        }
+    }
+
+    private void ApplySegmentFilter()
+    {
+        FilteredSegments.Clear();
+        if (_selectedFile == null)
+        {
+            SelectedSegment = null;
+            return;
+        }
+
+        IEnumerable<HitSegmentResult> query = _selectedFile.Segments;
+        if (string.Equals(_selectedSegmentFilterMode, "Offensive / Flagged Only", StringComparison.OrdinalIgnoreCase))
+        {
+            query = query.Where(s => s.IsFlagged);
+        }
+
+        if (!string.Equals(_selectedSpeaker, "All Speakers", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrWhiteSpace(_selectedSpeaker))
+        {
+            query = query.Where(s => string.Equals(s.SpeakerLabel, _selectedSpeaker, StringComparison.OrdinalIgnoreCase));
+        }
+
+        foreach (var seg in query)
+        {
+            FilteredSegments.Add(seg);
+        }
+
+        if (SelectedSegment != null && !FilteredSegments.Contains(SelectedSegment))
+        {
+            SelectedSegment = FilteredSegments.FirstOrDefault();
+        }
+        else if (SelectedSegment == null && FilteredSegments.Count > 0)
+        {
+            SelectedSegment = FilteredSegments[0];
         }
     }
 

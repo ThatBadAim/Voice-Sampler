@@ -9,17 +9,47 @@
     <Grid x:Name="Split" ColumnDefinitions="380,40,*">
         <Border x:Name="ListPane" Classes="panel">
             <DockPanel>
-                <TextBlock DockPanel.Dock="Top" Text="Review Queue" Classes="heading" Margin="0,0,0,20" />
-                <ListBox ItemsSource="{Binding PendingQueue}" SelectedItem="{Binding SelectedItem}">
+                <StackPanel DockPanel.Dock="Top" Spacing="12" Margin="0,0,0,16">
+                    <TextBlock Text="Review Queue" Classes="heading" />
+                    <!-- Filter Options -->
+                    <Grid ColumnDefinitions="*,*" ColumnSpacing="12">
+                        <ComboBox HorizontalAlignment="Stretch"
+                                  ItemsSource="{x:Static vm:ReviewViewModel.SegmentFilterModes}"
+                                  SelectedItem="{Binding SelectedSegmentFilterMode}" />
+                        <ComboBox Grid.Column="1" HorizontalAlignment="Stretch"
+                                  ItemsSource="{Binding AvailableSpeakers}"
+                                  SelectedItem="{Binding SelectedSpeaker}" />
+                    </Grid>
+                </StackPanel>
+
+                <ListBox ItemsSource="{Binding PendingQueue}" SelectedItem="{Binding SelectedItem}" SelectionChanged="Queue_SelectionChanged">
                     <ListBox.ItemTemplate>
                         <DataTemplate x:DataType="m:ReviewQueueItem">
-                            <StackPanel Spacing="6">
-                                <TextBlock Text="{Binding FileName}" TextTrimming="CharacterEllipsis" />
-                                <StackPanel Orientation="Horizontal" Spacing="12">
-                                    <TextBlock Text="{Binding Segment.StartTimeSeconds, StringFormat={}{0:F1}s}" Classes="secondary" />
-                                    <Border Classes="badge" Background="{Binding Segment.Verdict, Converter={x:Static svc:VerdictConverters.Background}}"><TextBlock Text="{Binding Segment.Verdict}" Foreground="{Binding Segment.Verdict, Converter={x:Static svc:VerdictConverters.Foreground}}" /></Border>
-                                    <TextBlock Text="{Binding Segment.Confidence, StringFormat={}{0:F3}}" Classes="secondary" />
+                            <StackPanel Spacing="6" Margin="0,4">
+                                <TextBlock Text="{Binding FileName}" TextTrimming="CharacterEllipsis" FontWeight="Medium" />
+                                <StackPanel Orientation="Horizontal" Spacing="8">
+                                    <TextBlock Text="{Binding Segment.StartTimeSeconds, StringFormat={}{0:F1}s}" Classes="secondary" VerticalAlignment="Center" />
+                                    <Border Classes="badge" Background="{Binding Segment.Verdict, Converter={x:Static svc:VerdictConverters.Background}}">
+                                        <TextBlock Text="{Binding Segment.Verdict}" Foreground="{Binding Segment.Verdict, Converter={x:Static svc:VerdictConverters.Foreground}}" />
+                                    </Border>
+                                    <TextBlock Text="{Binding Segment.Confidence, StringFormat={}{0:F3}}" Classes="secondary" VerticalAlignment="Center" />
+                                    <!-- Speaker pill tag -->
+                                    <Border Classes="badge" Background="{DynamicResource SurfaceRaisedBrush}" BorderBrush="{DynamicResource HairlineBrush}" BorderThickness="1"
+                                            IsVisible="{Binding DisplaySpeakerLabel, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+                                        <TextBlock Text="{Binding DisplaySpeakerLabel}" Foreground="{DynamicResource TextSecondaryBrush}" />
+                                    </Border>
+                                    <!-- Warning badge indicating violated moderation policy categories -->
+                                    <Border Classes="badge" Background="{DynamicResource VerdictErrorSoftBrush}" IsVisible="{Binding IsFlagged}">
+                                        <StackPanel Orientation="Horizontal" Spacing="4">
+                                            <PathIcon Data="{StaticResource IconShield}" Width="10" Height="10" Foreground="{DynamicResource VerdictErrorBrush}" />
+                                            <TextBlock Text="{Binding ViolationsSummary}" Foreground="{DynamicResource VerdictErrorBrush}" />
+                                        </StackPanel>
+                                    </Border>
                                 </StackPanel>
+                                <!-- Transcribed text in a selectable text block -->
+                                <SelectableTextBlock Text="{Binding Transcript}" TextWrapping="Wrap"
+                                                     IsVisible="{Binding Transcript, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
+                                                     Foreground="{DynamicResource TextSecondaryBrush}" FontSize="12" />
                             </StackPanel>
                         </DataTemplate>
                     </ListBox.ItemTemplate>
@@ -34,11 +64,30 @@
                         <TextBlock Classes="heading" TextWrapping="Wrap"
                                    Text="{Binding SelectedItem.FileName, FallbackValue='Select a segment from the review queue.', TargetNullValue='Select a segment from the review queue.'}" />
                         <StackPanel Orientation="Horizontal" Spacing="16" IsVisible="{Binding HasSelectedItem}">
-                            <TextBlock Text="{Binding SelectedItem.Segment.StartTimeSeconds, StringFormat='{}{0:F1}s'}" />
-                            <TextBlock Text="{Binding SelectedItem.Segment.EndTimeSeconds, StringFormat='– {0:F1}s'}" />
+                            <TextBlock Text="{Binding SelectedItem.Segment.StartTimeSeconds, StringFormat='{}{0:F1}s'}" VerticalAlignment="Center" FontWeight="SemiBold" />
+                            <TextBlock Text="{Binding SelectedItem.Segment.EndTimeSeconds, StringFormat='– {0:F1}s'}" VerticalAlignment="Center" />
                             <TextBlock Text="{Binding SelectedItem.ProfileName, StringFormat='Target: {0}'}" Classes="secondary" VerticalAlignment="Center" />
-                            <TextBlock Text="{Binding SelectedItem.Segment.Confidence, StringFormat='Confidence {0:F3}'}" FontWeight="SemiBold" />
+                            <TextBlock Text="{Binding SelectedItem.Segment.Confidence, StringFormat='Confidence {0:F3}'}" VerticalAlignment="Center" />
+                            <!-- Pill tag with speaker identifier -->
+                            <Border Classes="badge" Background="{DynamicResource SurfaceRaisedBrush}" BorderBrush="{DynamicResource HairlineBrush}" BorderThickness="1"
+                                    IsVisible="{Binding SelectedItem.DisplaySpeakerLabel, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+                                <TextBlock Text="{Binding SelectedItem.DisplaySpeakerLabel}" Foreground="{DynamicResource TextSecondaryBrush}" />
+                            </Border>
+                            <!-- Warning badge indicating violated moderation policy categories -->
+                            <Border Classes="badge" Background="{DynamicResource VerdictErrorSoftBrush}" IsVisible="{Binding SelectedItem.IsFlagged}">
+                                <StackPanel Orientation="Horizontal" Spacing="6">
+                                    <PathIcon Data="{StaticResource IconShield}" Width="12" Height="12" Foreground="{DynamicResource VerdictErrorBrush}" />
+                                    <TextBlock Text="{Binding SelectedItem.ViolationsSummary}" Foreground="{DynamicResource VerdictErrorBrush}" />
+                                </StackPanel>
+                            </Border>
                         </StackPanel>
+
+                        <!-- Transcribed text in a selectable text block -->
+                        <StackPanel Spacing="4" IsVisible="{Binding SelectedItem.Transcript, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+                            <TextBlock Text="Transcript" Classes="secondary" FontSize="11" />
+                            <SelectableTextBlock Text="{Binding SelectedItem.Transcript}" TextWrapping="Wrap" Classes="subtitle" />
+                        </StackPanel>
+
                         <ItemsControl ItemsSource="{Binding SelectedItem.Segment.ReasonFlags}">
                             <ItemsControl.ItemsPanel>
                                 <ItemsPanelTemplate><WrapPanel /></ItemsPanelTemplate>
@@ -51,28 +100,36 @@
                                 </DataTemplate>
                             </ItemsControl.ItemTemplate>
                         </ItemsControl>
-                        <Button HorizontalAlignment="Left" Click="PlaySnippet_Click" IsEnabled="{Binding CanPlaySnippet}"
-                                ToolTip.Tip="Audio playback needs ffplay (install ffmpeg) on PATH.">
-                            <StackPanel Orientation="Horizontal" Spacing="12">
-                                <PathIcon Data="{StaticResource IconPlay}" />
-                                <TextBlock Text="Play snippet" />
-                            </StackPanel>
-                        </Button>
+
+                        <!-- Audio playback scrub buttons seeking to Segment.Start -->
+                        <StackPanel Orientation="Horizontal" Spacing="12">
+                            <Button HorizontalAlignment="Left" Click="PlaySnippet_Click" IsEnabled="{Binding CanPlaySnippet}"
+                                    ToolTip.Tip="Audio playback needs ffplay (install ffmpeg) on PATH.">
+                                <StackPanel Orientation="Horizontal" Spacing="12">
+                                    <PathIcon Data="{StaticResource IconPlay}" />
+                                    <TextBlock Text="Play snippet" />
+                                </StackPanel>
+                            </Button>
+                            <Button HorizontalAlignment="Left" Click="ScrubToStart_Click" IsEnabled="{Binding CanPlaySnippet}">
+                                <TextBlock Text="Seek to start" />
+                            </Button>
+                        </StackPanel>
+
                         <TextBox Text="{Binding ReviewerNotes}" PlaceholderText="Reviewer notes (optional)" AcceptsReturn="True" MinHeight="60" TextWrapping="Wrap" />
                         <CheckBox Content="Add confirmed segment to voice profile" IsChecked="{Binding AddToProfileOnConfirm}" />
                         <StackPanel Orientation="Horizontal" Spacing="12">
                             <Button Classes="primary" Click="Confirm_Click" IsEnabled="{Binding CanAct}">
-                            <StackPanel Orientation="Horizontal" Spacing="12">
-                                <PathIcon Data="{StaticResource IconCheck}" />
-                                <TextBlock Text="Confirm" />
-                            </StackPanel>
-                        </Button>
+                                <StackPanel Orientation="Horizontal" Spacing="12">
+                                    <PathIcon Data="{StaticResource IconCheck}" />
+                                    <TextBlock Text="Confirm" />
+                                </StackPanel>
+                            </Button>
                             <Button Click="Reject_Click" IsEnabled="{Binding CanAct}">
-                            <StackPanel Orientation="Horizontal" Spacing="12">
-                                <PathIcon Data="{StaticResource IconClose}" />
-                                <TextBlock Text="Reject" />
-                            </StackPanel>
-                        </Button>
+                                <StackPanel Orientation="Horizontal" Spacing="12">
+                                    <PathIcon Data="{StaticResource IconClose}" />
+                                    <TextBlock Text="Reject" />
+                                </StackPanel>
+                            </Button>
                         </StackPanel>
                         <TextBlock Text="{Binding StatusMessage}" Classes="secondary" TextWrapping="Wrap" />
                     </StackPanel>

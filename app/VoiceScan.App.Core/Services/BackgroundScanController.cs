@@ -216,7 +216,11 @@ public sealed class BackgroundScanController : IBackgroundScanController
                             Confidence: seg.Confidence,
                             ReasonFlags: seg.ReasonFlags,
                             SegmentEmbedding: seg.Embedding,
-                            FileHash: scanResult.FileHash));
+                            FileHash: scanResult.FileHash,
+                            SpeakerLabel: seg.SpeakerLabel,
+                            Transcript: seg.Transcript,
+                            IsOffensive: seg.IsOffensive,
+                            ModerationViolations: seg.ModerationViolations));
                     }
 
                     if (scanResult.Verdict.Equals(PipelineScanner.ErrorVerdict, StringComparison.OrdinalIgnoreCase)) errors++;

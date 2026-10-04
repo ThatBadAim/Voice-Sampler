@@ -1,5 +1,6 @@
 using Avalonia.Controls;
 using Avalonia.Interactivity;
+using VoiceScan.App.Core.Models;
 using VoiceScan.App.Core.ViewModels;
 using VoiceScan.App.Services;
 
@@ -21,6 +22,16 @@ public partial class ReviewView : UserControl
     }
 
     private void PlaySnippet_Click(object? sender, RoutedEventArgs e) => ViewModel?.PlaySelectedSnippet();
+
+    private void ScrubToStart_Click(object? sender, RoutedEventArgs e) => ViewModel?.SeekToSelectedStart();
+
+    private void Queue_SelectionChanged(object? sender, SelectionChangedEventArgs e)
+    {
+        if (e.AddedItems.Count > 0 && e.AddedItems[0] is ReviewQueueItem)
+        {
+            ViewModel?.SeekToSelectedStart();
+        }
+    }
 
     private async void Confirm_Click(object? sender, RoutedEventArgs e)
     {

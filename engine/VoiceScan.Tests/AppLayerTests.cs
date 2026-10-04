@@ -227,6 +227,162 @@ public class AppLayerTests : IDisposable
     }
 
     [Fact]
+    public void ResultsViewModel_SegmentFilteringAndSpeakerProperties_OperatesCorrectly()
+    {
+        var output = new FakeAudioOutput();
+        var playback = new AudioPlaybackController(output);
+        var vm = new ResultsViewModel(playback);
+
+        var seg1 = new HitSegmentResult(
+            SegmentId: "seg1",
+            FilePath: "clip1.mp4",
+            StartTimeSeconds: 10.5,
+            EndTimeSeconds: 15.0,
+            DurationSeconds: 4.5,
+            Verdict: "Match",
+            Confidence: 0.92,
+            ReasonFlags: ["HIGH_SIMILARITY"],
+            SpeakerLabel: "SPEAKER_01",
+            Transcript: "Hello world!",
+            IsOffensive: false);
+
+        var seg2 = new HitSegmentResult(
+            SegmentId: "seg2",
+            FilePath: "clip1.mp4",
+            StartTimeSeconds: 20.0,
+            EndTimeSeconds: 25.0,
+            DurationSeconds: 5.0,
+            Verdict: "Match",
+            Confidence: 0.88,
+            ReasonFlags: ["OFFENSIVE_CONTENT"],
+            SpeakerLabel: "SPEAKER_02",
+            Transcript: "Inappropriate remarks here",
+            IsOffensive: true,
+            ModerationViolations: ["S2: Hate Speech"]);
+
+        var file1 = new FileVerdictResult("clip1.mp4", "clip1.mp4", "h1", 60.0, "Match", 0.92, [seg1, seg2]);
+        vm.SetResults([file1]);
+
+        Assert.Equal(file1, vm.SelectedFile);
+        Assert.Equal(2, vm.FilteredSegments.Count);
+        Assert.Contains("All Speakers", vm.AvailableSpeakers);
+        Assert.Contains("SPEAKER_01", vm.AvailableSpeakers);
+        Assert.Contains("SPEAKER_02", vm.AvailableSpeakers);
+
+        // Check exposed properties on SelectedSegment and forwarded properties on ResultsViewModel
+        Assert.Equal("SPEAKER_01", vm.SpeakerLabel);
+        Assert.Equal("Hello world!", vm.Transcript);
+        Assert.False(vm.IsFlagged);
+        Assert.Equal(10.5, seg1.Start);
+        Assert.Equal(15.0, seg1.End);
+
+        // Filter: Offensive / Flagged Only
+        vm.SelectedSegmentFilterMode = "Offensive / Flagged Only";
+        Assert.Single(vm.FilteredSegments);
+        Assert.Equal("seg2", vm.FilteredSegments[0].SegmentId);
+        Assert.Equal("SPEAKER_02", vm.SpeakerLabel);
+        Assert.Equal("Inappropriate remarks here", vm.Transcript);
+        Assert.True(vm.IsFlagged);
+        Assert.NotNull(vm.ModerationViolations);
+        Assert.Contains("S2: Hate Speech", vm.ModerationViolations);
+
+        // Filter: Speaker Filter
+        vm.SelectedSegmentFilterMode = "All Segments";
+        vm.SelectedSpeaker = "SPEAKER_01";
+        Assert.Single(vm.FilteredSegments);
+        Assert.Equal("seg1", vm.FilteredSegments[0].SegmentId);
+
+        // Scrub button seeking to Segment.Start
+        vm.SeekToSegment(seg1);
+        Assert.Equal(10.5, playback.CurrentPositionSeconds);
+
+        // Play Hit Segment seeks and plays
+        vm.PlayHitSegment(seg2);
+        Assert.InRange(playback.CurrentPositionSeconds, 20.0, 20.5);
+    }
+
+    [Fact]
+    public void ReviewViewModel_SegmentFilteringAndSpeakerProperties_OperatesCorrectly()
+    {
+        var output = new FakeAudioOutput();
+        var playback = new AudioPlaybackController(output);
+        var vm = new ReviewViewModel(new FakeReviewRepo(), playback);
+
+        var seg1 = new HitSegmentResult(
+            SegmentId: "seg1",
+            FilePath: "clip1.mp4",
+            StartTimeSeconds: 5.0,
+            EndTimeSeconds: 10.0,
+            DurationSeconds: 5.0,
+            Verdict: "Match",
+            Confidence: 0.91,
+            ReasonFlags: [],
+            SpeakerLabel: "SPEAKER_01",
+            Transcript: "Normal greeting",
+            IsOffensive: false);
+
+        var seg2 = new HitSegmentResult(
+            SegmentId: "seg2",
+            FilePath: "clip1.mp4",
+            StartTimeSeconds: 12.0,
+            EndTimeSeconds: 18.0,
+            DurationSeconds: 6.0,
+            Verdict: "Possible",
+            Confidence: 0.75,
+            ReasonFlags: [],
+            SpeakerLabel: "SPEAKER_02",
+            Transcript: "Toxic statement",
+            IsOffensive: true,
+            ModerationViolations: ["S1: Violent"]);
+
+        vm.EnqueueSegments([seg1, seg2], "Alice", "clip1.mp4");
+
+        Assert.Equal(2, vm.PendingQueue.Count);
+        Assert.Contains("All Speakers", vm.AvailableSpeakers);
+        Assert.Contains("SPEAKER_01", vm.AvailableSpeakers);
+        Assert.Contains("SPEAKER_02", vm.AvailableSpeakers);
+
+        // Forwarded properties on ReviewViewModel
+        Assert.Equal("SPEAKER_01", vm.SpeakerLabel);
+        Assert.Equal("Normal greeting", vm.Transcript);
+        Assert.False(vm.IsFlagged);
+
+        // Filter: Offensive / Flagged Only
+        vm.SelectedSegmentFilterMode = "Offensive / Flagged Only";
+        Assert.Single(vm.PendingQueue);
+        Assert.Equal("seg2", vm.PendingQueue[0].Segment.SegmentId);
+        Assert.Equal("SPEAKER_02", vm.SpeakerLabel);
+        Assert.Equal("Toxic statement", vm.Transcript);
+        Assert.True(vm.IsFlagged);
+        Assert.Equal("Toxic statement", vm.SelectedItem!.Transcript);
+        Assert.Equal("SPEAKER_02", vm.SelectedItem!.SpeakerLabel);
+        Assert.True(vm.SelectedItem!.IsFlagged);
+
+        // Scrub button seeking to Segment.Start
+        vm.SeekToSelectedStart();
+        Assert.Equal(12.0, playback.CurrentPositionSeconds);
+
+        // Filter by speaker
+        vm.SelectedSegmentFilterMode = "All Segments";
+        vm.SelectedSpeaker = "SPEAKER_01";
+        Assert.Single(vm.PendingQueue);
+        Assert.Equal("seg1", vm.PendingQueue[0].Segment.SegmentId);
+    }
+
+    private sealed class FakeReviewRepo : VoiceScan.App.Core.Services.IReviewRepository
+    {
+        public Task InitializeAsync() => Task.CompletedTask;
+        public Task RecordDecisionAsync(ReviewDecisionRecord record, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task<IReadOnlyList<ReviewDecisionRecord>> GetDecisionsAsync(string? profileName = null, CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlyList<ReviewDecisionRecord>>([]);
+        public Task<IReadOnlyList<ReviewDecisionRecord>> GetNegativeCohortAsync(CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlyList<ReviewDecisionRecord>>([]);
+        public Task<bool> AugmentProfileWithConfirmedHitAsync(string profilePath, ReviewDecisionRecord decision, CancellationToken cancellationToken = default) =>
+            Task.FromResult(true);
+        public void Dispose() { }
+    }
+
+    [Fact]
     public void AudioPlaybackController_SeekAndPlaySegment_UpdatesState()
     {
         var output = new FakeAudioOutput();

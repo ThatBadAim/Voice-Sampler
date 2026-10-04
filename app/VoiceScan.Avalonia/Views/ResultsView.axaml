@@ -53,7 +53,7 @@
                                Foreground="{DynamicResource VerdictErrorBrush}" />
                 </StackPanel>
 
-                <StackPanel DockPanel.Dock="Top" Spacing="12" Margin="0,0,0,24">
+                <StackPanel DockPanel.Dock="Top" Spacing="12" Margin="0,0,0,16">
                     <c:WaveformTimelineControl x:Name="Timeline" />
                     <StackPanel Orientation="Horizontal" Spacing="12">
                         <Button x:Name="PlayPauseButton" Classes="primary" Click="PlayPause_Click"
@@ -68,15 +68,88 @@
                     </StackPanel>
                 </StackPanel>
 
-                <ListBox x:Name="SegmentsList" ItemsSource="{Binding SelectedFile.Segments}" SelectionChanged="Segments_SelectionChanged">
+                <!-- Segment Filters -->
+                <Grid DockPanel.Dock="Top" ColumnDefinitions="*,*" ColumnSpacing="12" Margin="0,0,0,16">
+                    <ComboBox HorizontalAlignment="Stretch"
+                              ItemsSource="{x:Static vm:ResultsViewModel.SegmentFilterModes}"
+                              SelectedItem="{Binding SelectedSegmentFilterMode}" />
+                    <ComboBox Grid.Column="1" HorizontalAlignment="Stretch"
+                              ItemsSource="{Binding AvailableSpeakers}"
+                              SelectedItem="{Binding SelectedSpeaker}" />
+                </Grid>
+
+                <!-- Inspector Panel for Selected Segment -->
+                <Border DockPanel.Dock="Bottom" Classes="card" IsVisible="{Binding HasSelectedSegment}" Margin="0,16,0,0">
+                    <StackPanel Spacing="12">
+                        <TextBlock Text="Segment Inspector" Classes="heading" />
+                        <StackPanel Orientation="Horizontal" Spacing="12">
+                            <TextBlock Text="{Binding SelectedSegment.StartTimeSeconds, StringFormat='{}{0:F1}s'}" VerticalAlignment="Center" FontWeight="SemiBold" />
+                            <TextBlock Text="{Binding SelectedSegment.EndTimeSeconds, StringFormat='– {0:F1}s'}" VerticalAlignment="Center" />
+                            <TextBlock Text="{Binding SelectedSegment.DurationSeconds, StringFormat='({0:F1}s)'}" Classes="secondary" VerticalAlignment="Center" />
+                            <!-- Pill tag with speaker identifier -->
+                            <Border Classes="badge" Background="{DynamicResource SurfaceRaisedBrush}" BorderBrush="{DynamicResource HairlineBrush}" BorderThickness="1"
+                                    IsVisible="{Binding SelectedSegment.DisplaySpeakerLabel, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+                                <TextBlock Text="{Binding SelectedSegment.DisplaySpeakerLabel}" Foreground="{DynamicResource TextSecondaryBrush}" />
+                            </Border>
+                            <!-- Warning badge indicating violated moderation policy categories -->
+                            <Border Classes="badge" Background="{DynamicResource VerdictErrorSoftBrush}" IsVisible="{Binding SelectedSegment.IsFlagged}">
+                                <StackPanel Orientation="Horizontal" Spacing="6">
+                                    <PathIcon Data="{StaticResource IconShield}" Width="12" Height="12" Foreground="{DynamicResource VerdictErrorBrush}" />
+                                    <TextBlock Text="{Binding SelectedSegment.ViolationsSummary}" Foreground="{DynamicResource VerdictErrorBrush}" />
+                                </StackPanel>
+                            </Border>
+                        </StackPanel>
+
+                        <!-- Transcribed text in selectable text block -->
+                        <StackPanel Spacing="4" IsVisible="{Binding SelectedSegment.Transcript, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+                            <TextBlock Text="Transcript" Classes="secondary" FontSize="11" />
+                            <SelectableTextBlock Text="{Binding SelectedSegment.Transcript}" TextWrapping="Wrap" />
+                        </StackPanel>
+
+                        <!-- Audio playback scrub buttons seeking to Segment.Start -->
+                        <StackPanel Orientation="Horizontal" Spacing="12">
+                            <Button Click="PlaySelectedSegment_Click" IsEnabled="{Binding IsAudioAvailable}">
+                                <StackPanel Orientation="Horizontal" Spacing="8">
+                                    <PathIcon Data="{StaticResource IconPlay}" />
+                                    <TextBlock Text="Play Segment" />
+                                </StackPanel>
+                            </Button>
+                            <Button Click="ScrubToSegmentStart_Click" IsEnabled="{Binding IsAudioAvailable}">
+                                <TextBlock Text="Seek to Start" />
+                            </Button>
+                        </StackPanel>
+                    </StackPanel>
+                </Border>
+
+                <!-- Segments List -->
+                <ListBox x:Name="SegmentsList" ItemsSource="{Binding FilteredSegments}" SelectedItem="{Binding SelectedSegment}" SelectionChanged="Segments_SelectionChanged">
                     <ListBox.ItemTemplate>
                         <DataTemplate x:DataType="m:HitSegmentResult">
-                            <Grid ColumnDefinitions="140,90,80,*">
-                                <TextBlock Text="{Binding StartTimeSeconds, StringFormat={}{0:F1}s}" />
-                                <Border Grid.Column="1" Classes="badge" HorizontalAlignment="Left" Background="{Binding Verdict, Converter={x:Static svc:VerdictConverters.Background}}"><TextBlock Text="{Binding Verdict}" Foreground="{Binding Verdict, Converter={x:Static svc:VerdictConverters.Foreground}}" /></Border>
-                                <TextBlock Grid.Column="2" Text="{Binding Confidence, StringFormat={}{0:F3}}" />
-                                <TextBlock Grid.Column="3" Text="{Binding DurationSeconds, StringFormat={}{0:F1}s long}" Classes="secondary" />
-                            </Grid>
+                            <StackPanel Spacing="6" Margin="0,4">
+                                <Grid ColumnDefinitions="110,80,70,Auto,Auto,*">
+                                    <TextBlock Text="{Binding StartTimeSeconds, StringFormat={}{0:F1}s}" VerticalAlignment="Center" />
+                                    <Border Grid.Column="1" Classes="badge" HorizontalAlignment="Left" Background="{Binding Verdict, Converter={x:Static svc:VerdictConverters.Background}}">
+                                        <TextBlock Text="{Binding Verdict}" Foreground="{Binding Verdict, Converter={x:Static svc:VerdictConverters.Foreground}}" />
+                                    </Border>
+                                    <TextBlock Grid.Column="2" Text="{Binding Confidence, StringFormat={}{0:F3}}" VerticalAlignment="Center" Classes="secondary" />
+                                    <!-- Speaker pill tag -->
+                                    <Border Grid.Column="3" Classes="badge" Background="{DynamicResource SurfaceRaisedBrush}" BorderBrush="{DynamicResource HairlineBrush}" BorderThickness="1"
+                                            IsVisible="{Binding DisplaySpeakerLabel, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" Margin="0,0,8,0">
+                                        <TextBlock Text="{Binding DisplaySpeakerLabel}" Foreground="{DynamicResource TextSecondaryBrush}" />
+                                    </Border>
+                                    <!-- Warning badge indicating violated moderation policy categories -->
+                                    <Border Grid.Column="4" Classes="badge" Background="{DynamicResource VerdictErrorSoftBrush}" IsVisible="{Binding IsFlagged}">
+                                        <StackPanel Orientation="Horizontal" Spacing="4">
+                                            <PathIcon Data="{StaticResource IconShield}" Width="10" Height="10" Foreground="{DynamicResource VerdictErrorBrush}" />
+                                            <TextBlock Text="{Binding ViolationsSummary}" Foreground="{DynamicResource VerdictErrorBrush}" />
+                                        </StackPanel>
+                                    </Border>
+                                </Grid>
+                                <!-- Transcribed text in a selectable text block -->
+                                <SelectableTextBlock Text="{Binding Transcript}" TextWrapping="Wrap"
+                                                     IsVisible="{Binding Transcript, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
+                                                     Foreground="{DynamicResource TextPrimaryBrush}" FontSize="13" />
+                            </StackPanel>
                         </DataTemplate>
                     </ListBox.ItemTemplate>
                 </ListBox>

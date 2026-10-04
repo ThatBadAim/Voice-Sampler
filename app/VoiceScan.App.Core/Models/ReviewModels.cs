@@ -28,4 +28,15 @@ public sealed record ReviewQueueItem(
     string FileName,
     string ProfileName,
     DateTimeOffset DetectedAtUtc,
-    string? ProfilePath = null);
+    string? ProfilePath = null)
+{
+    public string? SpeakerLabel => Segment.SpeakerLabel;
+    public string? Transcript => Segment.Transcript;
+    public bool IsOffensive => Segment.IsOffensive;
+    public bool IsFlagged => Segment.IsFlagged;
+    public IReadOnlyList<string> ModerationViolations => Segment.ModerationViolations;
+    public string ViolationsSummary => Segment.ViolationsSummary;
+    public string? DisplaySpeakerLabel => Segment.DisplaySpeakerLabel;
+    public double Start => Segment.Start;
+    public double End => Segment.End;
+}

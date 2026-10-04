@@ -9,6 +9,7 @@ using System.Linq;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using VoiceScan.Core.Inference;
 using VoiceScan.Core.Storage;
 
 /// <summary>
@@ -30,24 +31,28 @@ public sealed class PipelineScanner
     private readonly ISpeakerEmbeddingModel _embeddingModel;
     private readonly WebRtcVad _vad;
     private readonly VoiceScanDatabase? _database;
+    private readonly IInferenceClient? _sidecarClient;
     private readonly int _batchSize;
 
     public PipelineScanner(
         ISpeakerEmbeddingModel embeddingModel,
         WebRtcVad vad,
         VoiceScanDatabase? database = null,
-        int? batchSize = null)
+        int? batchSize = null,
+        IInferenceClient? sidecarClient = null)
     {
         _embeddingModel = embeddingModel ?? throw new ArgumentNullException(nameof(embeddingModel));
         _vad = vad ?? throw new ArgumentNullException(nameof(vad));
         _database = database;
         _batchSize = Math.Max(1, batchSize ?? (embeddingModel.IsCudaActive ? GpuBatchSize : CpuBatchSize));
+        _sidecarClient = sidecarClient;
     }
 
     public static string EngineVersion { get; } = typeof(PipelineScanner).Assembly.GetName().Version?.ToString(3) ?? "0.0.0";
 
     public ISpeakerEmbeddingModel EmbeddingModel => _embeddingModel;
     public WebRtcVad Vad => _vad;
+    public IInferenceClient? SidecarClient => _sidecarClient;
 
     /// <summary>
     /// Throws unless <paramref name="profile"/> was enrolled with exactly this model, weights and front-end:
@@ -93,7 +98,8 @@ public sealed class PipelineScanner
         int scoreSmoothingRadius = DefaultScoreSmoothingRadius,
         Action<double>? reportProgress = null,
         CancellationToken cancellationToken = default,
-        Func<CancellationToken, Task>? pauseGate = null)
+        Func<CancellationToken, Task>? pauseGate = null,
+        IInferenceClient? sidecarClient = null)
     {
         double clusterDistance = clusterDistanceThreshold ?? _embeddingModel.OperatingPoint.ClusterDistanceThreshold;
         if (!File.Exists(mediaFilePath))
@@ -108,6 +114,8 @@ public sealed class PipelineScanner
         string windowSettings = string.Create(CultureInfo.InvariantCulture,
             $"w:{windowDurationSec:R}_h:{hopDurationSec:R}_trk:{audioTrackIndex}_{SpeechWindowExtractor.Fingerprint}");
         string cacheKey = string.Empty;
+
+        var activeSidecar = sidecarClient ?? _sidecarClient;
 
         // 1. Check SQLite Embedding Cache
         if (_database != null)
@@ -127,25 +135,82 @@ public sealed class PipelineScanner
                     cachedWindowItems.Add(new WindowItem(i, cw.StartTimeSeconds, cw.EndTimeSeconds, cw.Embedding, cw.SnrDb));
                 }
 
-                var (cachedSegments, cachedMaxConf, cachedVerdict) = ScoreAndAggregate(
-                    cachedWindowItems,
-                    targetProfile,
-                    threshold,
-                    clusterDistance,
-                    mergeToleranceSec,
-                    enableClustering,
-                    enableTemporalSmoothing,
-                    peakDelta,
-                    neighborToleranceSec,
-                    normalizer,
-                    scoreSmoothingRadius);
-
                 double duration = cachedInfo.DurationSeconds > 0.0
                     ? cachedInfo.DurationSeconds
                     : await AudioDecoder.GetMediaDurationSecondsAsync(mediaFilePath, cancellationToken);
                 if (duration <= 0.0 && cachedWindows.Count > 0)
                 {
                     duration = cachedWindows[^1].EndTimeSeconds;
+                }
+
+                SidecarScanResponse? cachedSidecarResponse = null;
+                if (activeSidecar != null)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    cachedSidecarResponse = await activeSidecar.ProcessAudioAsync(mediaFilePath, cancellationToken);
+                    if (cachedSidecarResponse != null && !cachedSidecarResponse.HasSpeech)
+                    {
+                        var noSpeechResult = new FileScanResult
+                        {
+                            FilePath = Path.GetFullPath(mediaFilePath),
+                            ClipId = Path.GetFileName(mediaFilePath),
+                            FileHash = fileHash,
+                            DurationSeconds = Math.Round(duration, 3),
+                            AudioTrackIndex = audioTrackIndex,
+                            Verdict = "No match",
+                            MaxConfidence = 0.0,
+                            Segments = new List<DetectedSegment>(),
+                            ReasonFlags = new List<string> { "NO_SPEECH_DETECTED" }
+                        };
+
+                        if (!string.IsNullOrEmpty(fileHash))
+                        {
+                            await _database.SaveScanResultAsync(
+                                noSpeechResult.FilePath,
+                                fileHash,
+                                targetProfile.ProfileName,
+                                _embeddingModel.ModelVersion,
+                                threshold,
+                                noSpeechResult.Verdict,
+                                noSpeechResult.MaxConfidence,
+                                "[]",
+                                cancellationToken: cancellationToken);
+                        }
+
+                        reportProgress?.Invoke(1.0);
+                        return noSpeechResult;
+                    }
+                }
+
+                List<DetectedSegment> cachedSegments;
+                double cachedMaxConf;
+                string cachedVerdict;
+
+                if (cachedSidecarResponse != null && cachedSidecarResponse.HasSpeech)
+                {
+                    cachedSegments = MapAndScoreSidecarSegments(
+                        cachedSidecarResponse.Segments,
+                        cachedWindowItems,
+                        targetProfile,
+                        threshold,
+                        normalizer);
+                    cachedMaxConf = cachedSegments.Count > 0 ? cachedSegments.Max(s => s.Confidence) : 0.0;
+                    cachedVerdict = ComputeOverallVerdict(cachedSegments);
+                }
+                else
+                {
+                    (cachedSegments, cachedMaxConf, cachedVerdict) = ScoreAndAggregate(
+                        cachedWindowItems,
+                        targetProfile,
+                        threshold,
+                        clusterDistance,
+                        mergeToleranceSec,
+                        enableClustering,
+                        enableTemporalSmoothing,
+                        peakDelta,
+                        neighborToleranceSec,
+                        normalizer,
+                        scoreSmoothingRadius);
                 }
 
                 var cachedResult = new FileScanResult
@@ -166,6 +231,7 @@ public sealed class PipelineScanner
                 if (!string.IsNullOrEmpty(fileHash))
                 {
                     string segJson = JsonSerializer.Serialize(cachedSegments);
+                    var primaryHit = cachedSegments.FirstOrDefault(s => s.Verdict == "Match") ?? cachedSegments.FirstOrDefault();
                     await _database.SaveScanResultAsync(
                         cachedResult.FilePath,
                         fileHash,
@@ -175,11 +241,56 @@ public sealed class PipelineScanner
                         cachedVerdict,
                         cachedMaxConf,
                         segJson,
-                        cancellationToken);
+                        speakerLabel: primaryHit?.SpeakerLabel,
+                        transcript: primaryHit?.Transcript,
+                        isOffensive: cachedSegments.Any(s => s.IsOffensive),
+                        moderationViolations: cachedSegments.SelectMany(s => s.ModerationViolations).Distinct().ToList(),
+                        cancellationToken: cancellationToken);
                 }
 
                 reportProgress?.Invoke(1.0);
                 return cachedResult;
+            }
+        }
+
+        // Sidecar check when processing audio
+        SidecarScanResponse? sidecarResponse = null;
+        if (activeSidecar != null)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            sidecarResponse = await activeSidecar.ProcessAudioAsync(mediaFilePath, cancellationToken);
+            if (sidecarResponse != null && !sidecarResponse.HasSpeech)
+            {
+                double duration = await AudioDecoder.GetMediaDurationSecondsAsync(mediaFilePath, cancellationToken);
+                var noSpeechResult = new FileScanResult
+                {
+                    FilePath = Path.GetFullPath(mediaFilePath),
+                    ClipId = Path.GetFileName(mediaFilePath),
+                    FileHash = fileHash,
+                    DurationSeconds = Math.Round(duration, 3),
+                    AudioTrackIndex = audioTrackIndex,
+                    Verdict = "No match",
+                    MaxConfidence = 0.0,
+                    Segments = new List<DetectedSegment>(),
+                    ReasonFlags = new List<string> { "NO_SPEECH_DETECTED" }
+                };
+
+                if (_database != null && !string.IsNullOrEmpty(fileHash))
+                {
+                    await _database.SaveScanResultAsync(
+                        noSpeechResult.FilePath,
+                        fileHash,
+                        targetProfile.ProfileName,
+                        _embeddingModel.ModelVersion,
+                        threshold,
+                        noSpeechResult.Verdict,
+                        noSpeechResult.MaxConfidence,
+                        "[]",
+                        cancellationToken: cancellationToken);
+                }
+
+                reportProgress?.Invoke(1.0);
+                return noSpeechResult;
             }
         }
 
@@ -288,18 +399,38 @@ public sealed class PipelineScanner
                 new CachedFileInfo(Math.Round(durationSeconds, 3), minPeaks, maxPeaks));
         }
 
-        var (segments, maxConfidence, verdict) = ScoreAndAggregate(
-            windowItems,
-            targetProfile,
-            threshold,
-            clusterDistance,
-            mergeToleranceSec,
-            enableClustering,
-            enableTemporalSmoothing,
-            peakDelta,
-            neighborToleranceSec,
-            normalizer,
-            scoreSmoothingRadius);
+        List<DetectedSegment> segments;
+        double maxConfidence;
+        string verdict;
+
+        if (sidecarResponse != null && sidecarResponse.HasSpeech)
+        {
+            segments = MapAndScoreSidecarSegments(
+                sidecarResponse.Segments,
+                windowItems,
+                targetProfile,
+                threshold,
+                normalizer,
+                spool,
+                _embeddingModel);
+            maxConfidence = segments.Count > 0 ? segments.Max(s => s.Confidence) : 0.0;
+            verdict = ComputeOverallVerdict(segments);
+        }
+        else
+        {
+            (segments, maxConfidence, verdict) = ScoreAndAggregate(
+                windowItems,
+                targetProfile,
+                threshold,
+                clusterDistance,
+                mergeToleranceSec,
+                enableClustering,
+                enableTemporalSmoothing,
+                peakDelta,
+                neighborToleranceSec,
+                normalizer,
+                scoreSmoothingRadius);
+        }
 
         var result = new FileScanResult
         {
@@ -319,6 +450,7 @@ public sealed class PipelineScanner
         if (_database != null && !string.IsNullOrEmpty(fileHash))
         {
             string segJson = JsonSerializer.Serialize(segments);
+            var primaryHit = segments.FirstOrDefault(s => s.Verdict == "Match") ?? segments.FirstOrDefault();
             await _database.SaveScanResultAsync(
                 result.FilePath,
                 fileHash,
@@ -328,12 +460,152 @@ public sealed class PipelineScanner
                 verdict,
                 maxConfidence,
                 segJson,
-                cancellationToken);
+                speakerLabel: primaryHit?.SpeakerLabel,
+                transcript: primaryHit?.Transcript,
+                isOffensive: segments.Any(s => s.IsOffensive),
+                moderationViolations: segments.SelectMany(s => s.ModerationViolations).Distinct().ToList(),
+                cancellationToken: cancellationToken);
         }
 
         Report(1.0);
         return result;
     }
+
+    private static List<DetectedSegment> MapAndScoreSidecarSegments(
+        IReadOnlyList<DetectedSegment> sidecarSegments,
+        IReadOnlyList<WindowItem> windowItems,
+        VoiceProfile targetProfile,
+        double threshold,
+        ScoreNormalizer? normalizer,
+        SpooledAudio? spool = null,
+        ISpeakerEmbeddingModel? embeddingModel = null)
+    {
+        var mapped = new List<DetectedSegment>(sidecarSegments.Count);
+        double possibleThreshold = Math.Max(0.10, threshold - 0.08);
+        (double Mean, double StdDev)? targetStats = normalizer != null && targetProfile.Centroid.Length > 0
+            ? normalizer.ComputeCohortStats(targetProfile.Centroid)
+            : null;
+
+        foreach (var src in sidecarSegments)
+        {
+            double segStart = src.StartTimeSeconds;
+            double segEnd = src.EndTimeSeconds;
+            double duration = Math.Max(0.01, segEnd - segStart);
+
+            var covered = windowItems
+                .Where(w => w.EndTimeSeconds > segStart && w.StartTimeSeconds < segEnd)
+                .ToList();
+
+            float[]? segEmb = src.Embedding;
+            double confidence = src.Confidence;
+            string verdict = src.Verdict;
+            var reasonFlags = new List<string>(src.ReasonFlags);
+
+            if (targetProfile.Centroid.Length > 0)
+            {
+                if (covered.Count > 0)
+                {
+                    segEmb = new float[covered[0].Embedding.Length];
+                    for (int w = 0; w < covered.Count; w++)
+                    {
+                        for (int d = 0; d < segEmb.Length; d++)
+                        {
+                            segEmb[d] += covered[w].Embedding[d];
+                        }
+                    }
+                    float norm = MathF.Sqrt(segEmb.Sum(x => x * x));
+                    if (norm > 1e-12f)
+                    {
+                        for (int d = 0; d < segEmb.Length; d++) segEmb[d] /= norm;
+                    }
+
+                    double snrDb = covered.Average(w => w.SnrDb);
+                    reasonFlags = AcousticDiagnostics.EvaluateReasonFlags(duration, snrDb, isCodecDegraded: false);
+
+                    float rawSim = SimilarityScorer.CosineSimilarity(segEmb, targetProfile.Centroid);
+                    double score = rawSim;
+                    if (normalizer != null && targetStats.HasValue)
+                    {
+                        double z = normalizer.NormalizeScoreWithTargetStats(rawSim, targetStats.Value, segEmb);
+                        score = ScoreNormalizer.CalibrateZScoreToConfidence(z);
+                    }
+
+                    confidence = Math.Round(score, 4);
+                    if (confidence >= threshold)
+                    {
+                        verdict = (reasonFlags.Contains("LOW_SNR") && confidence < threshold + 0.03) ? "Possible" : "Match";
+                    }
+                    else if (confidence >= possibleThreshold)
+                    {
+                        verdict = "Possible";
+                    }
+                    else
+                    {
+                        verdict = "No match";
+                    }
+                }
+                else if (spool != null && embeddingModel != null && spool.SampleCount > 0)
+                {
+                    long startSample = Math.Clamp((long)(segStart * 16000), 0, spool.SampleCount);
+                    long endSample = Math.Clamp((long)(segEnd * 16000), 0, spool.SampleCount);
+                    long sampleCount = endSample - startSample;
+                    if (sampleCount >= 1600) // at least 100ms
+                    {
+                        var samples = spool.Read(startSample, (int)sampleCount);
+                        segEmb = embeddingModel.ExtractEmbedding(samples);
+                        double snrDb = AcousticDiagnostics.EstimateSnrDb(samples);
+                        reasonFlags = AcousticDiagnostics.EvaluateReasonFlags(duration, snrDb, isCodecDegraded: false);
+
+                        float rawSim = SimilarityScorer.CosineSimilarity(segEmb, targetProfile.Centroid);
+                        double score = rawSim;
+                        if (normalizer != null && targetStats.HasValue)
+                        {
+                            double z = normalizer.NormalizeScoreWithTargetStats(rawSim, targetStats.Value, segEmb);
+                            score = ScoreNormalizer.CalibrateZScoreToConfidence(z);
+                        }
+
+                        confidence = Math.Round(score, 4);
+                        if (confidence >= threshold)
+                        {
+                            verdict = (reasonFlags.Contains("LOW_SNR") && confidence < threshold + 0.03) ? "Possible" : "Match";
+                        }
+                        else if (confidence >= possibleThreshold)
+                        {
+                            verdict = "Possible";
+                        }
+                        else
+                        {
+                            verdict = "No match";
+                        }
+                    }
+                }
+            }
+
+            mapped.Add(new DetectedSegment
+            {
+                StartTimeSeconds = Math.Round(segStart, 3),
+                EndTimeSeconds = Math.Round(segEnd, 3),
+                Confidence = confidence,
+                Verdict = verdict,
+                ReasonFlags = reasonFlags,
+                SpeakerLabel = src.SpeakerLabel,
+                Transcript = src.Transcript,
+                IsOffensive = src.IsOffensive,
+                ModerationViolations = src.ModerationViolations,
+                Embedding = segEmb
+            });
+        }
+
+        return mapped;
+    }
+
+    private static string ComputeOverallVerdict(IReadOnlyList<DetectedSegment> segments)
+    {
+        if (segments.Any(s => s.Verdict == "Match")) return "Match";
+        if (segments.Any(s => s.Verdict == "Possible")) return "Possible";
+        return "No match";
+    }
+
 
     /// <summary>Result recorded for a file that could not be scanned, so it is never mistaken for a clean "No match".</summary>
     public static FileScanResult CreateErrorResult(string filePath, int audioTrackIndex, Exception ex) => new()
@@ -616,7 +888,7 @@ public sealed class PipelineScanner
 
         return new ScanOutputDocument
         {
-            SchemaVersion = "1.0.0",
+            SchemaVersion = ScanOutputDocument.CurrentSchemaVersion,
             ScanMetadata = new ScanMetadata
             {
                 Timestamp = DateTime.UtcNow.ToString("o"),

@@ -14,6 +14,7 @@
             <SolidColorBrush x:Key="VerdictMatchSoftBrush" Color="#4E9F7D" Opacity="0.14" />
             <SolidColorBrush x:Key="VerdictPossibleSoftBrush" Color="#C9923A" Opacity="0.14" />
             <SolidColorBrush x:Key="VerdictNoMatchSoftBrush" Color="#8A857C" Opacity="0.14" />
+            <SolidColorBrush x:Key="VerdictErrorSoftBrush" Color="#C4584E" Opacity="0.14" />
 
             <CornerRadius x:Key="PanelRadius">8</CornerRadius>
             <CornerRadius x:Key="ControlRadius">6</CornerRadius>

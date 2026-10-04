@@ -301,4 +301,255 @@ public class StorageCacheTests
             }
         }
     }
+
+    [Fact]
+    public void ScanResultModels_SchemaVersion110_AndBackwardsCompatibility()
+    {
+        // 1. Default ScanOutputDocument has SchemaVersion 1.1.0
+        var doc = new ScanOutputDocument();
+        Assert.Equal("1.1.0", doc.SchemaVersion);
+        Assert.Equal("1.1.0", ScanOutputDocument.CurrentSchemaVersion);
+
+        // 2. Legacy JSON (v1.0.0 without diarization / transcription / moderation fields) deserializes cleanly
+        string legacyJson = @"{
+            ""schema_version"": ""1.0.0"",
+            ""scan_metadata"": {
+                ""timestamp"": ""2026-10-01T22:00:00Z"",
+                ""profile_name"": ""TargetUser"",
+                ""model_id"": ""ecapa_tdnn""
+            },
+            ""files"": [
+                {
+                    ""file_path"": ""/test.wav"",
+                    ""clip_id"": ""test.wav"",
+                    ""file_hash"": ""hash123"",
+                    ""verdict"": ""Match"",
+                    ""max_confidence"": 0.91,
+                    ""segments"": [
+                        {
+                            ""start_time_seconds"": 1.0,
+                            ""end_time_seconds"": 3.5,
+                            ""confidence"": 0.91,
+                            ""verdict"": ""Match"",
+                            ""reason_flags"": [""strong_match""]
+                        }
+                    ]
+                }
+            ]
+        }";
+
+        var deserializedLegacy = System.Text.Json.JsonSerializer.Deserialize<ScanOutputDocument>(legacyJson);
+        Assert.NotNull(deserializedLegacy);
+        Assert.Equal("1.0.0", deserializedLegacy.SchemaVersion);
+        Assert.Single(deserializedLegacy.Files);
+        var segLegacy = deserializedLegacy.Files[0].Segments[0];
+        Assert.Null(segLegacy.SpeakerLabel);
+        Assert.Null(segLegacy.Transcript);
+        Assert.False(segLegacy.IsOffensive);
+        Assert.NotNull(segLegacy.ModerationViolations);
+        Assert.Empty(segLegacy.ModerationViolations);
+
+        // 3. New segment with transcription, diarization, and moderation
+        var segment = new DetectedSegment
+        {
+            StartTimeSeconds = 2.0,
+            EndTimeSeconds = 5.0,
+            Confidence = 0.88,
+            Verdict = "Match",
+            ReasonFlags = new List<string> { "hit" },
+            SpeakerLabel = "SPEAKER_00",
+            Transcript = "Flagged abusive language detected",
+            IsOffensive = true,
+            ModerationViolations = new List<string> { "harassment", "toxicity" }
+        };
+
+        string json = System.Text.Json.JsonSerializer.Serialize(segment);
+        Assert.Contains("\"speaker_label\":\"SPEAKER_00\"", json);
+        Assert.Contains("\"transcript\":\"Flagged abusive language detected\"", json);
+        Assert.Contains("\"is_offensive\":true", json);
+        Assert.Contains("\"moderation_violations\":[\"harassment\",\"toxicity\"]", json);
+
+        var roundTripped = System.Text.Json.JsonSerializer.Deserialize<DetectedSegment>(json);
+        Assert.NotNull(roundTripped);
+        Assert.Equal("SPEAKER_00", roundTripped.SpeakerLabel);
+        Assert.Equal("Flagged abusive language detected", roundTripped.Transcript);
+        Assert.True(roundTripped.IsOffensive);
+        Assert.Equal(2, roundTripped.ModerationViolations.Count);
+        Assert.Contains("harassment", roundTripped.ModerationViolations);
+        Assert.Contains("toxicity", roundTripped.ModerationViolations);
+
+        // 4. Constructor initialization
+        var ctorSeg = new DetectedSegment(
+            1.5, 4.0, 0.75, "Possible",
+            speakerLabel: "SPEAKER_01",
+            transcript: "Clean speech",
+            isOffensive: false,
+            moderationViolations: Array.Empty<string>());
+        Assert.Equal("SPEAKER_01", ctorSeg.SpeakerLabel);
+        Assert.Equal("Clean speech", ctorSeg.Transcript);
+        Assert.False(ctorSeg.IsOffensive);
+        Assert.Empty(ctorSeg.ModerationViolations);
+    }
+
+    [Fact]
+    public async Task Database_SchemaVersion110_MigrationAndPersistenceRoundtrip()
+    {
+        string tempDb = Path.Combine(Path.GetTempPath(), $"test_v110_{Guid.NewGuid():N}.db");
+        try
+        {
+            using var db = new VoiceScanDatabase(tempDb);
+            await db.InitializeAsync();
+
+            // Verify SchemaVersion constant
+            Assert.Equal("1.1.0", VoiceScanDatabase.SchemaVersion);
+
+            // 1. Save scan result with the new v1.1.0 columns
+            string segmentsJson = "[{\"start_time_seconds\":1.0,\"end_time_seconds\":3.0,\"confidence\":0.85}]";
+            var violations = new List<string> { "threat", "harassment" };
+
+            await db.SaveScanResultAsync(
+                filePath: "/media/clip1.mp4",
+                fileHash: "hash-clip1",
+                profileName: "GamerProfile",
+                modelId: "speechbrain-ecapa-tdnn",
+                threshold: 0.55,
+                verdict: "Match",
+                maxConfidence: 0.85,
+                segmentsJson: segmentsJson,
+                speakerLabel: "SPEAKER_00",
+                transcript: "I see the player approaching",
+                isOffensive: true,
+                moderationViolations: violations);
+
+            // 2. Read single scan result
+            var single = await db.GetScanResultAsync("hash-clip1", "GamerProfile", "speechbrain-ecapa-tdnn", 0.55);
+            Assert.NotNull(single);
+            Assert.Equal("/media/clip1.mp4", single.FilePath);
+            Assert.Equal("hash-clip1", single.FileHash);
+            Assert.Equal("GamerProfile", single.ProfileName);
+            Assert.Equal("SPEAKER_00", single.SpeakerLabel);
+            Assert.Equal("I see the player approaching", single.Transcript);
+            Assert.True(single.IsOffensive);
+            Assert.NotNull(single.ModerationViolations);
+            Assert.Equal(2, single.ModerationViolations.Count);
+            Assert.Equal("threat", single.ModerationViolations[0]);
+            Assert.Equal("harassment", single.ModerationViolations[1]);
+
+            // 3. Query scan results list
+            var list = await db.GetScanResultsAsync(fileHash: "hash-clip1");
+            Assert.Single(list);
+            Assert.Equal("SPEAKER_00", list[0].SpeakerLabel);
+
+            // 4. Save another result without optional fields (backwards compatibility test)
+            await db.SaveScanResultAsync(
+                filePath: "/media/clip2.mp4",
+                fileHash: "hash-clip2",
+                profileName: "GamerProfile",
+                modelId: "speechbrain-ecapa-tdnn",
+                threshold: 0.55,
+                verdict: "No match",
+                maxConfidence: 0.20,
+                segmentsJson: "[]");
+
+            var second = await db.GetScanResultAsync("hash-clip2", "GamerProfile", "speechbrain-ecapa-tdnn", 0.55);
+            Assert.NotNull(second);
+            Assert.Null(second.SpeakerLabel);
+            Assert.Null(second.Transcript);
+            Assert.False(second.IsOffensive);
+            Assert.NotNull(second.ModerationViolations);
+            Assert.Empty(second.ModerationViolations);
+        }
+        finally
+        {
+            if (File.Exists(tempDb)) File.Delete(tempDb);
+        }
+    }
+
+    [Fact]
+    public async Task Database_UpgradesExistingDatabaseFromV4ToV5()
+    {
+        string tempDb = Path.Combine(Path.GetTempPath(), $"test_upgrade_v4_v5_{Guid.NewGuid():N}.db");
+        try
+        {
+            // Create a legacy v4 database manually
+            using (var connection = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={tempDb}"))
+            {
+                await connection.OpenAsync();
+                using var cmd = connection.CreateCommand();
+                cmd.CommandText = @"
+                    CREATE TABLE schema_migrations (
+                        version INTEGER PRIMARY KEY,
+                        applied_at TEXT NOT NULL,
+                        description TEXT NOT NULL
+                    );
+                    INSERT INTO schema_migrations (version, applied_at, description) VALUES
+                        (1, datetime('now'), 'Initial schema'),
+                        (2, datetime('now'), 'SNR and overlap'),
+                        (3, datetime('now'), 'Waveform envelope'),
+                        (4, datetime('now'), 'Model fingerprint');
+
+                    CREATE TABLE scan_results (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        file_path TEXT NOT NULL,
+                        file_hash TEXT NOT NULL,
+                        profile_name TEXT NOT NULL,
+                        model_id TEXT NOT NULL,
+                        threshold REAL NOT NULL,
+                        verdict TEXT NOT NULL,
+                        max_confidence REAL NOT NULL,
+                        segments_json TEXT NOT NULL,
+                        scanned_at TEXT NOT NULL
+                    );
+
+                    INSERT INTO scan_results (file_path, file_hash, profile_name, model_id, threshold, verdict, max_confidence, segments_json, scanned_at)
+                    VALUES ('/legacy.mp4', 'legacy-hash', 'User1', 'model1', 0.5, 'Match', 0.95, '[]', datetime('now'));
+                ";
+                await cmd.ExecuteNonQueryAsync();
+            }
+
+            // Open with VoiceScanDatabase, which should run migration 5
+            using (var db = new VoiceScanDatabase(tempDb))
+            {
+                await db.InitializeAsync();
+
+                // 1. Existing row should now be readable with null/default values
+                var legacyResult = await db.GetScanResultAsync("legacy-hash", "User1", "model1", 0.5);
+                Assert.NotNull(legacyResult);
+                Assert.Equal("/legacy.mp4", legacyResult.FilePath);
+                Assert.Null(legacyResult.SpeakerLabel);
+                Assert.Null(legacyResult.Transcript);
+                Assert.False(legacyResult.IsOffensive);
+                Assert.NotNull(legacyResult.ModerationViolations);
+                Assert.Empty(legacyResult.ModerationViolations);
+
+                // 2. Writing a new row with new columns works seamlessly
+                await db.SaveScanResultAsync(
+                    filePath: "/new.mp4",
+                    fileHash: "new-hash",
+                    profileName: "User1",
+                    modelId: "model1",
+                    threshold: 0.5,
+                    verdict: "Match",
+                    maxConfidence: 0.99,
+                    segmentsJson: "[]",
+                    speakerLabel: "SPEAKER_02",
+                    transcript: "Upgraded DB works",
+                    isOffensive: false,
+                    moderationViolations: new[] { "none" });
+
+                var newResult = await db.GetScanResultAsync("new-hash", "User1", "model1", 0.5);
+                Assert.NotNull(newResult);
+                Assert.Equal("SPEAKER_02", newResult.SpeakerLabel);
+                Assert.Equal("Upgraded DB works", newResult.Transcript);
+                Assert.NotNull(newResult.ModerationViolations);
+                Assert.Single(newResult.ModerationViolations);
+                Assert.Equal("none", newResult.ModerationViolations[0]);
+            }
+        }
+        finally
+        {
+            if (File.Exists(tempDb)) File.Delete(tempDb);
+        }
+    }
 }
+
