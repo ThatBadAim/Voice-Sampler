@@ -46,12 +46,20 @@ public static class AudioDecoder
         var startInfo = new ProcessStartInfo
         {
             FileName = "ffprobe",
-            Arguments = $"-v error -select_streams a -show_entries stream=index,codec_name,channels,sample_rate:stream_tags=title,language -of json \"{mediaFilePath}\"",
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             UseShellExecute = false,
             CreateNoWindow = true
         };
+        startInfo.ArgumentList.Add("-v");
+        startInfo.ArgumentList.Add("error");
+        startInfo.ArgumentList.Add("-select_streams");
+        startInfo.ArgumentList.Add("a");
+        startInfo.ArgumentList.Add("-show_entries");
+        startInfo.ArgumentList.Add("stream=index,codec_name,channels,sample_rate:stream_tags=title,language");
+        startInfo.ArgumentList.Add("-of");
+        startInfo.ArgumentList.Add("json");
+        startInfo.ArgumentList.Add(mediaFilePath);
 
         try
         {
@@ -121,12 +129,18 @@ public static class AudioDecoder
         var startInfo = new ProcessStartInfo
         {
             FileName = "ffprobe",
-            Arguments = $"-v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 \"{mediaFilePath}\"",
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             UseShellExecute = false,
             CreateNoWindow = true
         };
+        startInfo.ArgumentList.Add("-v");
+        startInfo.ArgumentList.Add("error");
+        startInfo.ArgumentList.Add("-show_entries");
+        startInfo.ArgumentList.Add("format=duration");
+        startInfo.ArgumentList.Add("-of");
+        startInfo.ArgumentList.Add("default=noprint_wrappers=1:nokey=1");
+        startInfo.ArgumentList.Add(mediaFilePath);
 
         try
         {
@@ -176,16 +190,30 @@ public static class AudioDecoder
         });
 
         // Arguments: decode selected audio track directly to raw f32le 16kHz mono stdout stream
-        string mapArg = audioTrackIndex >= 0 ? $"-map 0:a:{audioTrackIndex}?" : "-map 0:a:0?";
         var startInfo = new ProcessStartInfo
         {
             FileName = "ffmpeg",
-            Arguments = $"-y -v error -i \"{mediaFilePath}\" {mapArg} -f f32le -acodec pcm_f32le -ac 1 -ar {sampleRate} -",
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             UseShellExecute = false,
             CreateNoWindow = true
         };
+        startInfo.ArgumentList.Add("-y");
+        startInfo.ArgumentList.Add("-v");
+        startInfo.ArgumentList.Add("error");
+        startInfo.ArgumentList.Add("-i");
+        startInfo.ArgumentList.Add(mediaFilePath);
+        startInfo.ArgumentList.Add("-map");
+        startInfo.ArgumentList.Add(audioTrackIndex >= 0 ? $"0:a:{audioTrackIndex}?" : "0:a:0?");
+        startInfo.ArgumentList.Add("-f");
+        startInfo.ArgumentList.Add("f32le");
+        startInfo.ArgumentList.Add("-acodec");
+        startInfo.ArgumentList.Add("pcm_f32le");
+        startInfo.ArgumentList.Add("-ac");
+        startInfo.ArgumentList.Add("1");
+        startInfo.ArgumentList.Add("-ar");
+        startInfo.ArgumentList.Add(sampleRate.ToString());
+        startInfo.ArgumentList.Add("-");
 
         var process = Process.Start(startInfo) ?? throw new InvalidOperationException($"Failed to launch FFmpeg for {mediaFilePath}");
         using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -299,24 +327,32 @@ public static class AudioDecoder
             Directory.CreateDirectory(parent);
         }
 
-        string mapArg = audioTrackIndex >= 0 ? $"-map 0:a:{audioTrackIndex}?" : "-map 0:a:0?";
         var startInfo = new ProcessStartInfo
         {
             FileName = "ffmpeg",
-            Arguments = string.Format(
-                System.Globalization.CultureInfo.InvariantCulture,
-                "-y -v error -ss {0:F3} -t {1:F3} -i \"{2}\" {3} -ar {4} -ac 1 -c:a pcm_s16le \"{5}\"",
-                Math.Max(0.0, startTimeSeconds),
-                Math.Max(0.1, durationSeconds),
-                mediaFilePath,
-                mapArg,
-                sampleRate,
-                outputWavPath),
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             UseShellExecute = false,
             CreateNoWindow = true
         };
+        startInfo.ArgumentList.Add("-y");
+        startInfo.ArgumentList.Add("-v");
+        startInfo.ArgumentList.Add("error");
+        startInfo.ArgumentList.Add("-ss");
+        startInfo.ArgumentList.Add(Math.Max(0.0, startTimeSeconds).ToString("F3", System.Globalization.CultureInfo.InvariantCulture));
+        startInfo.ArgumentList.Add("-t");
+        startInfo.ArgumentList.Add(Math.Max(0.1, durationSeconds).ToString("F3", System.Globalization.CultureInfo.InvariantCulture));
+        startInfo.ArgumentList.Add("-i");
+        startInfo.ArgumentList.Add(mediaFilePath);
+        startInfo.ArgumentList.Add("-map");
+        startInfo.ArgumentList.Add(audioTrackIndex >= 0 ? $"0:a:{audioTrackIndex}?" : "0:a:0?");
+        startInfo.ArgumentList.Add("-ar");
+        startInfo.ArgumentList.Add(sampleRate.ToString());
+        startInfo.ArgumentList.Add("-ac");
+        startInfo.ArgumentList.Add("1");
+        startInfo.ArgumentList.Add("-c:a");
+        startInfo.ArgumentList.Add("pcm_s16le");
+        startInfo.ArgumentList.Add(outputWavPath);
 
         using var process = Process.Start(startInfo) ?? throw new InvalidOperationException($"Failed to launch FFmpeg for extraction: {outputWavPath}");
         var stderrTask = process.StandardError.ReadToEndAsync(cancellationToken);
