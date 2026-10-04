@@ -35,6 +35,8 @@ public sealed class OnnxEmbeddingModel : ISpeakerEmbeddingModel
             throw new FileNotFoundException($"Embedding model weights not found at: {modelPath}");
         }
 
+        ModelIntegrity.Verify(modelPath);
+
         string fileName = Path.GetFileName(modelPath);
         if (fileName.Contains("titanet", StringComparison.OrdinalIgnoreCase))
         {
