@@ -45,5 +45,46 @@ public record StoredScanResult(
     string? SpeakerLabel = null,
     string? Transcript = null,
     bool IsOffensive = false,
-    IReadOnlyList<string>? ModerationViolations = null);
+    IReadOnlyList<string>? ModerationViolations = null)
+{
+    public virtual bool Equals(StoredScanResult? other)
+    {
+        if (other is null) return false;
+        if (ReferenceEquals(this, other)) return true;
+        return Id == other.Id
+            && FilePath == other.FilePath
+            && FileHash == other.FileHash
+            && ProfileName == other.ProfileName
+            && ModelId == other.ModelId
+            && Math.Abs(Threshold - other.Threshold) < 1e-6
+            && Verdict == other.Verdict
+            && Math.Abs(MaxConfidence - other.MaxConfidence) < 1e-6
+            && SegmentsJson == other.SegmentsJson
+            && ScannedAt == other.ScannedAt
+            && SpeakerLabel == other.SpeakerLabel
+            && Transcript == other.Transcript
+            && IsOffensive == other.IsOffensive
+            && ((ModerationViolations == null && other.ModerationViolations == null) ||
+                (ModerationViolations != null && other.ModerationViolations != null && System.Linq.Enumerable.SequenceEqual(ModerationViolations, other.ModerationViolations)));
+    }
+
+    public override int GetHashCode()
+    {
+        var hash = new HashCode();
+        hash.Add(Id);
+        hash.Add(FilePath);
+        hash.Add(FileHash);
+        hash.Add(ProfileName);
+        hash.Add(ModelId);
+        hash.Add(Threshold);
+        hash.Add(Verdict);
+        hash.Add(MaxConfidence);
+        hash.Add(SegmentsJson);
+        hash.Add(ScannedAt);
+        hash.Add(SpeakerLabel);
+        hash.Add(Transcript);
+        hash.Add(IsOffensive);
+        return hash.ToHashCode();
+    }
+}
 

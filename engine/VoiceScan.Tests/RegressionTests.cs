@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Globalization;
+using System.Runtime.InteropServices;
 using System.Text.Json;
 using VoiceScan.App.Core.Models;
 using VoiceScan.App.Core.Services;
@@ -16,7 +17,11 @@ public sealed class RegressionTests : IDisposable
     private static readonly string SpeechWav = Path.Combine(Fixtures, "jfk_speech.wav");
     private readonly string _root = Directory.CreateTempSubdirectory("vs_regression_").FullName;
 
-    public void Dispose() => Directory.Delete(_root, recursive: true);
+    public void Dispose()
+    {
+        Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+        try { Directory.Delete(_root, recursive: true); } catch { }
+    }
 
     private static float[] Speech() => AudioDecoder.DecodeEntireFileAsync(SpeechWav).GetAwaiter().GetResult();
 
@@ -396,8 +401,11 @@ public sealed class RegressionTests : IDisposable
         string dirB = Path.Combine(_root, "b");
         Directory.CreateDirectory(dirA);
         Directory.CreateDirectory(dirB);
-        string fileA = Path.Combine(dirA, "=HYPERLINK(\"x\").wav");
-        string fileB = Path.Combine(dirB, "=HYPERLINK(\"x\").wav");
+        string fileName = RuntimeInformation.IsOSPlatform(OSPlatform.Windows)
+            ? "=HYPERLINK(test).wav"
+            : "=HYPERLINK(\"x\").wav";
+        string fileA = Path.Combine(dirA, fileName);
+        string fileB = Path.Combine(dirB, fileName);
         File.Copy(SpeechWav, fileA);
         File.Copy(SpeechWav, fileB);
 
@@ -412,7 +420,14 @@ public sealed class RegressionTests : IDisposable
         Assert.Equal(2, export.ExtractedAudioClipPaths.Distinct().Count());
         Assert.All(export.ExtractedAudioClipPaths, p => Assert.True(File.Exists(p)));
         string csv = File.ReadAllText(export.CsvPath);
-        Assert.Contains("\"'=HYPERLINK(\"\"x\"\").wav\"", csv);
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+        {
+            Assert.Contains("\"'=HYPERLINK(test).wav\"", csv);
+        }
+        else
+        {
+            Assert.Contains("\"'=HYPERLINK(\"\"x\"\").wav\"", csv);
+        }
         Assert.DoesNotContain(",\"=HYPERLINK", csv);
 
         byte[] pdf = File.ReadAllBytes(export.PdfPath);

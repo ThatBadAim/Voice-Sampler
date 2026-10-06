@@ -22,6 +22,7 @@ public partial class ResultsView : UserControl
         FilterCombo.ItemsSource = Enum.GetValues<VerdictFilter>();
         SortCombo.ItemsSource = Enum.GetValues<ResultSortColumn>();
         Timeline.SeekRequested += (_, pos) => ViewModel?.SeekTo(pos);
+        Timeline.SegmentSelected += (_, seg) => ViewModel?.PlayHitSegment(seg);
         SizeChanged += (_, e) => ResponsiveLayout.SplitPanes(Split, e.NewSize.Width < ResponsiveLayout.StackedPageWidth,
             360, ListPane, DetailPane, EmptyText);
         DataContextChanged += (_, _) => Resubscribe();

@@ -57,7 +57,10 @@ public class SecurityHardeningTests
         string dir = Directory.CreateTempSubdirectory().FullName;
         try
         {
-            string name = Path.Combine(dir, "a\" -f null \"b.wav");
+            string fileName = System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(System.Runtime.InteropServices.OSPlatform.Windows)
+                ? "a' -f null 'b.wav"
+                : "a\" -f null \"b.wav";
+            string name = Path.Combine(dir, fileName);
             File.Copy(Path.Combine(AppContext.BaseDirectory, "fixtures", "jfk_speech.wav"), name);
 
             var tracks = await AudioDecoder.ProbeAudioTracksAsync(name);

@@ -98,10 +98,13 @@ public sealed class MainAppViewModel : INotifyPropertyChanged
                 {
                     Results.AddResult(item);
 
-                    // Add segments needing review (Possible or Match with reason flags) to Review queue
+                    // Add segments needing review (Possible, Match with reason flags, or Moderated/Offensive) to Review queue
                     var reviewCandidates = item.Segments.Where(seg =>
                         seg.Verdict.Equals("Possible", StringComparison.OrdinalIgnoreCase) ||
-                        seg.ReasonFlags.Count > 0);
+                        seg.ReasonFlags.Count > 0 ||
+                        seg.IsOffensive ||
+                        seg.IsFlagged ||
+                        (seg.ModerationViolations != null && seg.ModerationViolations.Count > 0));
 
                     Review.EnqueueSegments(reviewCandidates, item.ProfileName ?? "Unknown profile", item.FileName, item.ProfilePath);
                 }

@@ -49,7 +49,7 @@ public sealed class HitSegmentViewModel : INotifyPropertyChanged
 
     public string? SpeakerLabel => _segment.SpeakerLabel;
     public string? DisplaySpeakerLabel => _segment.DisplaySpeakerLabel;
-    public string? Transcript => _segment.Transcript;
+    public string Transcript => _segment.Transcript;
     public bool IsOffensive => _segment.IsOffensive;
     public bool IsFlagged => _segment.IsFlagged;
     public IReadOnlyList<string> ModerationViolations => _segment.ModerationViolations;

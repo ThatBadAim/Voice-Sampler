@@ -34,15 +34,143 @@ public static class AudioDecoder
 {
     private const int StderrTailChars = 2000;
 
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, string> s_resolvedTools = new();
+
+    /// <summary>
+    /// Resolves the absolute path to a native tool (ffmpeg, ffprobe, ffplay), checking PATH,
+    /// known Windows Winget locations, and the application base directory.
+    /// </summary>
+    public static string ResolveToolPath(string tool)
+    {
+        return s_resolvedTools.GetOrAdd(tool, ResolveToolPathInternal);
+    }
+
+    private static string ResolveToolPathInternal(string tool)
+    {
+        bool isWindows = OperatingSystem.IsWindows();
+        string exeName = isWindows && !tool.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)
+            ? tool + ".exe"
+            : tool;
+
+        // 1. Check System/User PATH
+        string? pathEnv = Environment.GetEnvironmentVariable("PATH");
+        if (!string.IsNullOrWhiteSpace(pathEnv))
+        {
+            var pathDirs = pathEnv.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            foreach (var dir in pathDirs)
+            {
+                try
+                {
+                    string candidate = Path.Combine(dir, exeName);
+                    if (File.Exists(candidate))
+                    {
+                        return Path.GetFullPath(candidate);
+                    }
+                    if (isWindows && !candidate.Equals(Path.Combine(dir, tool), StringComparison.OrdinalIgnoreCase))
+                    {
+                        string candidateNoExt = Path.Combine(dir, tool);
+                        if (File.Exists(candidateNoExt))
+                        {
+                            return Path.GetFullPath(candidateNoExt);
+                        }
+                    }
+                }
+                catch { }
+            }
+        }
+
+        // 2. Known default Windows Winget install locations
+        if (isWindows)
+        {
+            string localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+
+            // - %LOCALAPPDATA%\Microsoft\WinGet\Packages\ (recursing for ffmpeg.exe)
+            string wingetPackages = Path.Combine(localAppData, "Microsoft", "WinGet", "Packages");
+            if (Directory.Exists(wingetPackages))
+            {
+                try
+                {
+                    var found = Directory.EnumerateFiles(wingetPackages, exeName, SearchOption.AllDirectories).FirstOrDefault();
+                    if (found != null && File.Exists(found))
+                    {
+                        RegisterOnPath(Path.GetDirectoryName(found));
+                        return Path.GetFullPath(found);
+                    }
+                }
+                catch { }
+            }
+
+            // - %LOCALAPPDATA%\Microsoft\WinGet\Links\ffmpeg.exe
+            string wingetLink = Path.Combine(localAppData, "Microsoft", "WinGet", "Links", exeName);
+            if (File.Exists(wingetLink))
+            {
+                RegisterOnPath(Path.GetDirectoryName(wingetLink));
+                return Path.GetFullPath(wingetLink);
+            }
+
+            // - C:\Program Files\ffmpeg\bin\ffmpeg.exe
+            string progFiles = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
+            string progFilesFfmpeg = Path.Combine(progFiles, "ffmpeg", "bin", exeName);
+            if (File.Exists(progFilesFfmpeg))
+            {
+                RegisterOnPath(Path.GetDirectoryName(progFilesFfmpeg));
+                return Path.GetFullPath(progFilesFfmpeg);
+            }
+            if (File.Exists($@"C:\Program Files\ffmpeg\bin\{exeName}"))
+            {
+                RegisterOnPath(@"C:\Program Files\ffmpeg\bin");
+                return Path.GetFullPath($@"C:\Program Files\ffmpeg\bin\{exeName}");
+            }
+        }
+
+        // 3. Application directory: AppContext.BaseDirectory
+        string baseDir = AppContext.BaseDirectory;
+        string inBase = Path.Combine(baseDir, exeName);
+        if (File.Exists(inBase))
+        {
+            RegisterOnPath(baseDir);
+            return Path.GetFullPath(inBase);
+        }
+        string inBaseTool = Path.Combine(baseDir, tool);
+        if (File.Exists(inBaseTool))
+        {
+            RegisterOnPath(baseDir);
+            return Path.GetFullPath(inBaseTool);
+        }
+        string inSubDir = Path.Combine(baseDir, "ffmpeg", exeName);
+        if (File.Exists(inSubDir))
+        {
+            RegisterOnPath(Path.Combine(baseDir, "ffmpeg"));
+            return Path.GetFullPath(inSubDir);
+        }
+
+        return tool;
+    }
+
+    private static void RegisterOnPath(string? dir)
+    {
+        if (string.IsNullOrEmpty(dir)) return;
+        try
+        {
+            string currentPath = Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
+            if (!currentPath.Split(Path.PathSeparator).Contains(dir, StringComparer.OrdinalIgnoreCase))
+            {
+                Environment.SetEnvironmentVariable("PATH", dir + Path.PathSeparator + currentPath);
+            }
+        }
+        catch { }
+    }
+
     /// <summary>
     /// Builds an FFmpeg/ffprobe launch with a discrete argument list (no shell-style quoting, so file names cannot inject options)
     /// and a protocol whitelist so media containers can never open network or other non-local inputs.
     /// </summary>
     private static ProcessStartInfo CreateStartInfo(string tool, params string[] args)
     {
+        string resolvedTool = ResolveToolPath(tool);
         var info = new ProcessStartInfo
         {
-            FileName = tool,
+            FileName = resolvedTool,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             UseShellExecute = false,
@@ -126,6 +254,12 @@ public static class AudioDecoder
             return 0.0;
         }
 
+        if (mediaFilePath.EndsWith(".wav", StringComparison.OrdinalIgnoreCase))
+        {
+            double nativeDur = TryGetWavDuration(mediaFilePath);
+            if (nativeDur > 0) return nativeDur;
+        }
+
         var startInfo = CreateStartInfo("ffprobe",
             "-v", "error", "-show_entries", "format=duration",
             "-of", "default=noprint_wrappers=1:nokey=1", "-i", mediaFilePath);
@@ -178,10 +312,31 @@ public static class AudioDecoder
             args.Add("-t");
             args.Add(maxDurationSeconds.Value.ToString("F3", inv));
         }
-        args.AddRange(["-f", "f32le", "-acodec", "pcm_f32le", "-ac", "1", "-ar", sampleRate.ToString(inv), "-"]);
+        args.AddRange(["-f", "f32le", "-acodec", "pcm_f32le", "-ac", "1", "-ar", sampleRate.ToString(inv), "-vn", "pipe:1"]);
         var startInfo = CreateStartInfo("ffmpeg", [.. args]);
+        Process? process = null;
+        bool useWavFallback = false;
 
-        var process = Process.Start(startInfo) ?? throw new InvalidOperationException($"Failed to launch FFmpeg for {mediaFilePath}");
+        try
+        {
+            process = Process.Start(startInfo);
+            if (process == null) throw new InvalidOperationException($"Failed to launch FFmpeg for {mediaFilePath}");
+        }
+        catch (System.ComponentModel.Win32Exception) when (mediaFilePath.EndsWith(".wav", StringComparison.OrdinalIgnoreCase))
+        {
+            useWavFallback = true;
+        }
+
+        if (useWavFallback)
+        {
+            await foreach (var chunk in StreamDecodeWavNativeAsync(mediaFilePath, sampleRate, chunkSize, cancellationToken, maxDurationSeconds))
+            {
+                yield return chunk;
+            }
+            yield break;
+        }
+
+        Process activeProcess = process!;
         using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
 
         // Producer task: reads raw stdout and pushes chunks into bounded channel
@@ -190,9 +345,9 @@ public static class AudioDecoder
             try
             {
                 // Drained concurrently so a chatty FFmpeg can never block on a full stderr pipe.
-                var stderrTask = ReadTailAsync(process.StandardError, linkedCts.Token);
+                var stderrTask = ReadTailAsync(activeProcess.StandardError, linkedCts.Token);
 
-                var stream = process.StandardOutput.BaseStream;
+                var stream = activeProcess.StandardOutput.BaseStream;
                 byte[] byteBuffer = new byte[chunkSize * sizeof(float)];
                 long totalSamplesRead = 0;
 
@@ -213,12 +368,12 @@ public static class AudioDecoder
                         linkedCts.Token);
                 }
 
-                await process.WaitForExitAsync(linkedCts.Token);
+                await activeProcess.WaitForExitAsync(linkedCts.Token);
                 string stderr = await stderrTask;
-                if (process.ExitCode != 0)
+                if (activeProcess.ExitCode != 0)
                 {
                     throw new InvalidDataException(
-                        $"FFmpeg could not decode '{Path.GetFileName(mediaFilePath)}' (exit code {process.ExitCode}): {LastLine(stderr)}");
+                        $"FFmpeg could not decode '{Path.GetFileName(mediaFilePath)}' (exit code {activeProcess.ExitCode}): {LastLine(stderr)}");
                 }
                 if (!string.IsNullOrWhiteSpace(stderr))
                 {
@@ -238,8 +393,8 @@ public static class AudioDecoder
             {
                 // Kill before Dispose: a disposed Process can no longer be queried or killed, and an FFmpeg
                 // left blocked on a full stdout pipe would otherwise linger until the pipe is finalized.
-                KillQuietly(process);
-                process.Dispose();
+                KillQuietly(activeProcess);
+                activeProcess.Dispose();
             }
         });
 
@@ -405,5 +560,153 @@ public static class AudioDecoder
             totalRead += read;
         }
         return totalRead;
+    }
+
+    private static double TryGetWavDuration(string wavPath)
+    {
+        try
+        {
+            using var fs = new FileStream(wavPath, FileMode.Open, FileAccess.Read, FileShare.Read);
+            using var br = new BinaryReader(fs);
+            if (fs.Length < 44) return 0.0;
+            string riff = new string(br.ReadChars(4));
+            if (riff != "RIFF") return 0.0;
+            br.ReadInt32(); // size
+            string wave = new string(br.ReadChars(4));
+            if (wave != "WAVE") return 0.0;
+
+            int sampleRate = 16000;
+            short channels = 1;
+            short bitsPerSample = 16;
+            int dataLength = 0;
+
+            while (fs.Position < fs.Length - 8)
+            {
+                string chunkId = new string(br.ReadChars(4));
+                int chunkSize = br.ReadInt32();
+                if (chunkId == "fmt ")
+                {
+                    short format = br.ReadInt16();
+                    channels = br.ReadInt16();
+                    sampleRate = br.ReadInt32();
+                    br.ReadInt32();
+                    br.ReadInt16();
+                    bitsPerSample = br.ReadInt16();
+                    int rem = chunkSize - 16;
+                    if (rem > 0) fs.Seek(rem, SeekOrigin.Current);
+                }
+                else if (chunkId == "data")
+                {
+                    dataLength = chunkSize;
+                    break;
+                }
+                else
+                {
+                    fs.Seek(chunkSize, SeekOrigin.Current);
+                }
+            }
+
+            if (sampleRate > 0 && channels > 0 && bitsPerSample > 0 && dataLength > 0)
+            {
+                int bytesPerSample = (bitsPerSample / 8) * channels;
+                return (double)(dataLength / bytesPerSample) / sampleRate;
+            }
+        }
+        catch { }
+        return 0.0;
+    }
+
+    private static async IAsyncEnumerable<DecodedAudioChunk> StreamDecodeWavNativeAsync(
+        string wavPath,
+        int targetSampleRate,
+        int chunkSize,
+        [EnumeratorCancellation] CancellationToken cancellationToken,
+        double? maxDurationSeconds)
+    {
+        using var fs = new FileStream(wavPath, FileMode.Open, FileAccess.Read, FileShare.Read);
+        using var br = new BinaryReader(fs);
+        if (fs.Length < 44) yield break;
+
+        string riff = new string(br.ReadChars(4));
+        if (riff != "RIFF") yield break;
+        br.ReadInt32();
+        string wave = new string(br.ReadChars(4));
+        if (wave != "WAVE") yield break;
+
+        int sampleRate = 16000;
+        short channels = 1;
+        short bitsPerSample = 16;
+        int dataLength = 0;
+
+        while (fs.Position < fs.Length - 8)
+        {
+            string chunkId = new string(br.ReadChars(4));
+            int size = br.ReadInt32();
+            if (chunkId == "fmt ")
+            {
+                short format = br.ReadInt16();
+                channels = br.ReadInt16();
+                sampleRate = br.ReadInt32();
+                br.ReadInt32();
+                br.ReadInt16();
+                bitsPerSample = br.ReadInt16();
+                int rem = size - 16;
+                if (rem > 0) fs.Seek(rem, SeekOrigin.Current);
+            }
+            else if (chunkId == "data")
+            {
+                dataLength = size;
+                break;
+            }
+            else
+            {
+                fs.Seek(size, SeekOrigin.Current);
+            }
+        }
+
+        if (channels <= 0 || bitsPerSample != 16) yield break;
+
+        long maxSamples = maxDurationSeconds.HasValue ? (long)(maxDurationSeconds.Value * targetSampleRate) : long.MaxValue;
+        long totalRead = 0;
+        int bytesPerFrame = channels * 2;
+        byte[] readBuffer = new byte[chunkSize * bytesPerFrame];
+
+        while (fs.Position < fs.Length && totalRead < maxSamples)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            int toRead = readBuffer.Length;
+            if (maxDurationSeconds.HasValue)
+            {
+                long remainingBytes = (maxSamples - totalRead) * bytesPerFrame;
+                toRead = (int)Math.Min((long)readBuffer.Length, remainingBytes);
+            }
+            int bytesRead = await fs.ReadAsync(readBuffer.AsMemory(0, toRead), cancellationToken);
+            if (bytesRead < bytesPerFrame) break;
+
+            int frames = bytesRead / bytesPerFrame;
+            float[] samples = new float[frames];
+            for (int i = 0; i < frames; i++)
+            {
+                if (channels == 1)
+                {
+                    short val = BitConverter.ToInt16(readBuffer, i * 2);
+                    samples[i] = val / 32768f;
+                }
+                else
+                {
+                    float sum = 0f;
+                    for (int ch = 0; ch < channels; ch++)
+                    {
+                        sum += BitConverter.ToInt16(readBuffer, (i * channels + ch) * 2) / 32768f;
+                    }
+                    samples[i] = sum / channels;
+                }
+            }
+
+            double startTime = (double)totalRead / targetSampleRate;
+            totalRead += frames;
+            bool isLast = fs.Position >= fs.Length || totalRead >= maxSamples;
+            yield return new DecodedAudioChunk(samples, totalRead - frames, startTime, isLast);
+        }
     }
 }

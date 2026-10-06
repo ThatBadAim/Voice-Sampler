@@ -31,7 +31,7 @@ public sealed record ReviewQueueItem(
     string? ProfilePath = null)
 {
     public string? SpeakerLabel => Segment.SpeakerLabel;
-    public string? Transcript => Segment.Transcript;
+    public string Transcript => Segment.Transcript;
     public bool IsOffensive => Segment.IsOffensive;
     public bool IsFlagged => Segment.IsFlagged;
     public IReadOnlyList<string> ModerationViolations => Segment.ModerationViolations;

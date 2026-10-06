@@ -12,7 +12,13 @@
                 <StackPanel DockPanel.Dock="Top" Spacing="12" Margin="0,0,0,16">
                     <TextBlock Text="Review Queue" Classes="heading" />
                     <!-- Filter Options -->
-                    <Grid ColumnDefinitions="*,*" ColumnSpacing="12">
+                    <Grid ColumnDefinitions="*,*" ColumnSpacing="8">
+                        <Button Content="All Segments" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"
+                                Command="{Binding FilterAllSegmentsCommand}" ToolTip.Tip="Show all segments in review queue" />
+                        <Button Grid.Column="1" Content="Flagged Violations Only" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"
+                                Command="{Binding FilterFlaggedViolationsOnlyCommand}" ToolTip.Tip="Filter to segments flagged for policy violations" />
+                    </Grid>
+                    <Grid ColumnDefinitions="*,*" ColumnSpacing="8">
                         <ComboBox HorizontalAlignment="Stretch"
                                   ItemsSource="{x:Static vm:ReviewViewModel.SegmentFilterModes}"
                                   SelectedItem="{Binding SelectedSegmentFilterMode}" />

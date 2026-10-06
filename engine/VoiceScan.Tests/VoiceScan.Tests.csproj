@@ -21,7 +21,12 @@
   <ItemGroup>
     <None Update="fixtures\jfk_speech.wav" CopyToOutputDirectory="PreserveNewest" />
     <None Update="fixtures\*.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Update="..\..\models\*.onnx" CopyToOutputDirectory="PreserveNewest" Link="models\%(Filename)%(Extension)" />
   </ItemGroup>
+
+  <Target Name="EnsureModelsDirectory" BeforeTargets="BeforeBuild">
+    <MakeDir Directories="$(OutputPath)models" />
+  </Target>
 
   <ItemGroup>
     <ProjectReference Include="..\VoiceScan.Core\VoiceScan.Core.csproj" />

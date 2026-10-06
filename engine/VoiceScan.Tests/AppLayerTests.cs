@@ -277,18 +277,23 @@ public class AppLayerTests : IDisposable
         Assert.Equal(15.0, seg1.End);
 
         // Filter: Offensive / Flagged Only
-        vm.SelectedSegmentFilterMode = "Offensive / Flagged Only";
+        // Filter: Flagged Violations Only via Command
+        vm.FilterFlaggedViolationsOnlyCommand.Execute(null);
         Assert.Single(vm.FilteredSegments);
         Assert.Equal("seg2", vm.FilteredSegments[0].SegmentId);
         Assert.Equal("SPEAKER_02", vm.SpeakerLabel);
         Assert.Equal("Inappropriate remarks here", vm.Transcript);
+        Assert.True(vm.IsOffensive);
         Assert.True(vm.IsFlagged);
         Assert.NotNull(vm.ModerationViolations);
         Assert.Contains("S2: Hate Speech", vm.ModerationViolations);
 
-        // Filter: Speaker Filter
-        vm.SelectedSegmentFilterMode = "All Segments";
-        vm.SelectedSpeaker = "SPEAKER_01";
+        // Filter: All Segments via Command
+        vm.FilterAllSegmentsCommand.Execute(null);
+        Assert.Equal(2, vm.FilteredSegments.Count);
+
+        // Filter: Speaker Filter via Command
+        vm.FilterBySpeakerCommand.Execute("SPEAKER_01");
         Assert.Single(vm.FilteredSegments);
         Assert.Equal("seg1", vm.FilteredSegments[0].SegmentId);
 
@@ -347,24 +352,29 @@ public class AppLayerTests : IDisposable
         Assert.Equal("Normal greeting", vm.Transcript);
         Assert.False(vm.IsFlagged);
 
-        // Filter: Offensive / Flagged Only
-        vm.SelectedSegmentFilterMode = "Offensive / Flagged Only";
+        // Filter: Flagged Violations Only via Command
+        vm.FilterFlaggedViolationsOnlyCommand.Execute(null);
         Assert.Single(vm.PendingQueue);
         Assert.Equal("seg2", vm.PendingQueue[0].Segment.SegmentId);
         Assert.Equal("SPEAKER_02", vm.SpeakerLabel);
         Assert.Equal("Toxic statement", vm.Transcript);
+        Assert.True(vm.IsOffensive);
         Assert.True(vm.IsFlagged);
         Assert.Equal("Toxic statement", vm.SelectedItem!.Transcript);
         Assert.Equal("SPEAKER_02", vm.SelectedItem!.SpeakerLabel);
+        Assert.True(vm.SelectedItem!.IsOffensive);
         Assert.True(vm.SelectedItem!.IsFlagged);
+
+        // Filter: All Segments via Command
+        vm.FilterAllSegmentsCommand.Execute(null);
+        Assert.Equal(2, vm.PendingQueue.Count);
 
         // Scrub button seeking to Segment.Start
         vm.SeekToSelectedStart();
         Assert.Equal(12.0, playback.CurrentPositionSeconds);
 
-        // Filter by speaker
-        vm.SelectedSegmentFilterMode = "All Segments";
-        vm.SelectedSpeaker = "SPEAKER_01";
+        // Filter by speaker via Command
+        vm.FilterBySpeakerCommand.Execute("SPEAKER_01");
         Assert.Single(vm.PendingQueue);
         Assert.Equal("seg1", vm.PendingQueue[0].Segment.SegmentId);
     }

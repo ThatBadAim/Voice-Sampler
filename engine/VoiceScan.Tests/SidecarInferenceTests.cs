@@ -141,6 +141,140 @@ public class SidecarInferenceTests
     {
         using var client = new SidecarClient();
         await Assert.ThrowsAsync<ArgumentException>(() => client.ProcessAudioAsync(""));
+        await Assert.ThrowsAsync<ArgumentException>(() => client.ScanAudioAsync(""));
+    }
+
+    [Fact]
+    public void SidecarClient_PathTranslation_MapsHostToContainer()
+    {
+        string hostPath1 = @"C:\AudioData\sample.wav";
+        Assert.Equal("/data/sample.wav", SidecarClient.MapHostPath(hostPath1));
+
+        string hostPath2 = @"C:\AudioData\nested\subfolder\recording.mkv";
+        Assert.Equal("/data/nested/subfolder/recording.mkv", SidecarClient.MapHostPath(hostPath2));
+
+        string fwdPath = "C:/AudioData/match1.wav";
+        Assert.Equal("/data/match1.wav", SidecarClient.MapHostPath(fwdPath));
+
+        string alreadyMapped = "/data/already.wav";
+        Assert.Equal("/data/already.wav", SidecarClient.MapHostPath(alreadyMapped));
+    }
+
+    [Fact]
+    public async Task SidecarClient_IsReadyAsync_RetriesWithBackoffAndSucceeds()
+    {
+        int attempts = 0;
+        var handler = new MockHttpMessageHandler(req =>
+        {
+            attempts++;
+            if (attempts < 3)
+            {
+                return new HttpResponseMessage(HttpStatusCode.ServiceUnavailable);
+            }
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("{\"status\":\"ready\",\"cuda_available\":true}", Encoding.UTF8, "application/json")
+            };
+        });
+
+        using var httpClient = new HttpClient(handler);
+        using var client = new SidecarClient(httpClient);
+
+        bool ready = await client.IsReadyWithBackoffAsync(maxRetries: 4, initialDelayMs: 10);
+        Assert.True(ready);
+        Assert.Equal(3, attempts);
+    }
+
+    [Fact]
+    public async Task SidecarClient_IsReadyAsync_ReturnsFalseWhenRetriesExhausted()
+    {
+        int attempts = 0;
+        var handler = new MockHttpMessageHandler(req =>
+        {
+            attempts++;
+            return new HttpResponseMessage(HttpStatusCode.ServiceUnavailable);
+        });
+
+        using var httpClient = new HttpClient(handler);
+        using var client = new SidecarClient(httpClient);
+
+        bool ready = await client.IsReadyWithBackoffAsync(maxRetries: 3, initialDelayMs: 10);
+        Assert.False(ready);
+        Assert.Equal(3, attempts);
+    }
+
+    [Fact]
+    public async Task SidecarClient_ScanAudioAsync_TranslatesPathInRequestBody()
+    {
+        string? sentAudioPath = null;
+        var handler = new MockHttpMessageHandler(req =>
+        {
+            var body = req.Content!.ReadAsStringAsync().GetAwaiter().GetResult();
+            using var doc = System.Text.Json.JsonDocument.Parse(body);
+            sentAudioPath = doc.RootElement.GetProperty("audio_path").GetString();
+
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("{\"has_speech\":true,\"segments\":[]}", Encoding.UTF8, "application/json")
+            };
+        });
+
+        using var httpClient = new HttpClient(handler);
+        using var client = new SidecarClient(httpClient);
+
+        var response = await client.ScanAudioAsync(@"C:\AudioData\tournaments\final.wav");
+        Assert.NotNull(response);
+        Assert.Equal("/data/tournaments/final.wav", sentAudioPath);
+    }
+
+    [Fact]
+    public async Task SidecarClient_ScanAudioAsync_HandlesHttp500ErrorGracefully()
+    {
+        var handler = new MockHttpMessageHandler(req =>
+            new HttpResponseMessage(HttpStatusCode.InternalServerError)
+            {
+                Content = new StringContent("Out of VRAM or CUDA kernel fault", Encoding.UTF8, "text/plain")
+            });
+
+        using var httpClient = new HttpClient(handler);
+        using var client = new SidecarClient(httpClient);
+
+        var ex = await Assert.ThrowsAsync<HttpRequestException>(() => client.ScanAudioAsync(@"C:\AudioData\fail.wav"));
+        Assert.Contains("500", ex.Message);
+        Assert.Contains("CUDA kernel fault", ex.Message);
+
+        // ProcessAudioAsync catches it and logs, returning null
+        var fallback = await client.ProcessAudioAsync(@"C:\AudioData\fail.wav");
+        Assert.Null(fallback);
+    }
+
+    [Fact]
+    public async Task SidecarClient_ScanAudioAsync_HandlesTimeoutAndRecovers()
+    {
+        bool firstCall = true;
+        var handler = new MockHttpMessageHandler(req =>
+        {
+            if (firstCall)
+            {
+                firstCall = false;
+                throw new TaskCanceledException("The request was canceled due to the configured HttpClient.Timeout of 15 minutes.");
+            }
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("{\"has_speech\":true,\"segments\":[]}", Encoding.UTF8, "application/json")
+            };
+        });
+
+        using var httpClient = new HttpClient(handler);
+        using var client = new SidecarClient(httpClient);
+
+        // First attempt times out
+        await Assert.ThrowsAsync<TimeoutException>(() => client.ScanAudioAsync(@"C:\AudioData\long.wav"));
+
+        // Second attempt recovers when server is responsive
+        var recovered = await client.ScanAudioAsync(@"C:\AudioData\recovered.wav");
+        Assert.NotNull(recovered);
+        Assert.True(recovered.HasSpeech);
     }
 
     [Fact]
@@ -344,6 +478,97 @@ public class SidecarInferenceTests
         {
             if (File.Exists(wavPath)) File.Delete(wavPath);
             if (File.Exists(tempDb)) File.Delete(tempDb);
+        }
+    }
+
+    [Fact]
+    public void HitSegmentResult_IsFlagged_ReturnsTrueWhenViolationsOrOffensive()
+    {
+        var seg1 = new VoiceScan.App.Core.Models.HitSegmentResult(
+            SegmentId: "seg1",
+            FilePath: "sample.wav",
+            StartTimeSeconds: 0.0,
+            EndTimeSeconds: 2.0,
+            DurationSeconds: 2.0,
+            Verdict: "Match",
+            Confidence: 0.9,
+            ReasonFlags: Array.Empty<string>(),
+            IsOffensive: false,
+            ModerationViolations: new[] { "threat" });
+
+        Assert.True(seg1.IsFlagged);
+        Assert.Equal("threat", seg1.ViolationsSummary);
+
+        var seg2 = new VoiceScan.App.Core.Models.HitSegmentResult(
+            SegmentId: "seg2",
+            FilePath: "sample.wav",
+            StartTimeSeconds: 0.0,
+            EndTimeSeconds: 2.0,
+            DurationSeconds: 2.0,
+            Verdict: "Match",
+            Confidence: 0.9,
+            ReasonFlags: Array.Empty<string>(),
+            IsOffensive: true,
+            ModerationViolations: Array.Empty<string>());
+
+        Assert.True(seg2.IsFlagged);
+        Assert.Equal("Violation", seg2.ViolationsSummary);
+    }
+
+    [Fact]
+    public async Task SidecarClient_ProcessAudio_ParsesDetoxifyScoresAndSnakeCaseKeys()
+    {
+        string fakeAudio = Path.GetTempFileName();
+        try
+        {
+            var handler = new MockHttpMessageHandler(req =>
+            {
+                string json = @"{
+                    ""has_speech"": true,
+                    ""segments"": [
+                        {
+                            ""start_time_seconds"": 1.0,
+                            ""end_time_seconds"": 4.0,
+                            ""confidence"": 0.92,
+                            ""verdict"": ""Match"",
+                            ""reason_flags"": [],
+                            ""speaker_label"": ""SPEAKER_00"",
+                            ""transcript"": ""Toxic threat statement"",
+                            ""is_offensive"": true,
+                            ""moderation_violations"": [""threat"", ""toxicity""],
+                            ""moderation_scores"": {
+                                ""toxicity"": 0.99,
+                                ""threat"": 0.85
+                            }
+                        }
+                    ]
+                }";
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(json, Encoding.UTF8, "application/json")
+                };
+            });
+
+            using var httpClient = new HttpClient(handler);
+            using var client = new SidecarClient(httpClient);
+
+            var resp = await client.ProcessAudioAsync(fakeAudio);
+            Assert.NotNull(resp);
+            Assert.True(resp.HasSpeech);
+            Assert.Single(resp.Segments);
+
+            var seg = resp.Segments[0];
+            Assert.Equal("SPEAKER_00", seg.SpeakerLabel);
+            Assert.Equal("Toxic threat statement", seg.Transcript);
+            Assert.True(seg.IsOffensive);
+            Assert.Equal(2, seg.ModerationViolations.Count);
+            Assert.NotNull(seg.ModerationScores);
+            Assert.Equal(0.99, seg.ModerationScores["toxicity"]);
+            Assert.Equal(0.85, seg.ModerationScores["threat"]);
+        }
+        finally
+        {
+            if (File.Exists(fakeAudio)) File.Delete(fakeAudio);
         }
     }
 }

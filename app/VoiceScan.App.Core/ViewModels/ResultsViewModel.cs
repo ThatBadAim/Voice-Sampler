@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
+using System.Windows.Input;
 using VoiceScan.App.Core.Models;
 using VoiceScan.App.Core.Services;
 
@@ -79,10 +80,29 @@ public sealed class ResultsViewModel : INotifyPropertyChanged
     private string _selectedSegmentFilterMode = "All Segments";
     private string _selectedSpeaker = "All Speakers";
 
-    public static readonly IReadOnlyList<string> SegmentFilterModes = ["All Segments", "Offensive / Flagged Only"];
+    public static readonly IReadOnlyList<string> SegmentFilterModes = ["All Segments", "Flagged Violations Only"];
 
     public ObservableCollection<HitSegmentResult> FilteredSegments { get; } = [];
     public ObservableCollection<string> AvailableSpeakers { get; } = ["All Speakers"];
+
+    public ICommand FilterAllSegmentsCommand { get; }
+    public ICommand FilterFlaggedViolationsOnlyCommand { get; }
+    public ICommand FilterBySpeakerCommand { get; }
+
+    public void FilterAllSegments()
+    {
+        SelectedSegmentFilterMode = "All Segments";
+    }
+
+    public void FilterFlaggedViolationsOnly()
+    {
+        SelectedSegmentFilterMode = "Flagged Violations Only";
+    }
+
+    public void FilterBySpeaker(string? speaker)
+    {
+        SelectedSpeaker = string.IsNullOrWhiteSpace(speaker) ? "All Speakers" : speaker;
+    }
 
     public string SelectedSegmentFilterMode
     {
@@ -146,10 +166,10 @@ public sealed class ResultsViewModel : INotifyPropertyChanged
     }
 
     public string? SpeakerLabel => _selectedSegment?.SpeakerLabel;
-    public string? Transcript => _selectedSegment?.Transcript;
+    public string Transcript => _selectedSegment?.Transcript ?? string.Empty;
     public bool IsFlagged => _selectedSegment?.IsFlagged ?? false;
     public bool IsOffensive => _selectedSegment?.IsOffensive ?? false;
-    public IReadOnlyList<string>? ModerationViolations => _selectedSegment?.ModerationViolations;
+    public IReadOnlyList<string> ModerationViolations => _selectedSegment?.ModerationViolations ?? Array.Empty<string>();
     public bool HasSelectedSegment => _selectedSegment != null;
 
     public double PlaybackPosition
@@ -187,6 +207,10 @@ public sealed class ResultsViewModel : INotifyPropertyChanged
     public ResultsViewModel(IAudioPlaybackController playbackController)
     {
         _playbackController = playbackController;
+
+        FilterAllSegmentsCommand = new RelayCommand(FilterAllSegments);
+        FilterFlaggedViolationsOnlyCommand = new RelayCommand(FilterFlaggedViolationsOnly);
+        FilterBySpeakerCommand = new RelayCommand<string>(FilterBySpeaker);
 
         _playbackController.PositionChanged += (s, pos) =>
         {
@@ -370,9 +394,10 @@ public sealed class ResultsViewModel : INotifyPropertyChanged
         }
 
         IEnumerable<HitSegmentResult> query = _selectedFile.Segments;
-        if (string.Equals(_selectedSegmentFilterMode, "Offensive / Flagged Only", StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(_selectedSegmentFilterMode, "Flagged Violations Only", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(_selectedSegmentFilterMode, "Offensive / Flagged Only", StringComparison.OrdinalIgnoreCase))
         {
-            query = query.Where(s => s.IsFlagged);
+            query = query.Where(s => s.IsOffensive || s.IsFlagged || (s.ModerationViolations != null && s.ModerationViolations.Count > 0));
         }
 
         if (!string.Equals(_selectedSpeaker, "All Speakers", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrWhiteSpace(_selectedSpeaker))

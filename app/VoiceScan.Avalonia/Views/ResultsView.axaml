@@ -69,11 +69,13 @@
                 </StackPanel>
 
                 <!-- Segment Filters -->
-                <Grid DockPanel.Dock="Top" ColumnDefinitions="*,*" ColumnSpacing="12" Margin="0,0,0,16">
-                    <ComboBox HorizontalAlignment="Stretch"
+                <Grid DockPanel.Dock="Top" ColumnDefinitions="Auto,Auto,*,*" ColumnSpacing="10" Margin="0,0,0,16">
+                    <Button Content="All Segments" Command="{Binding FilterAllSegmentsCommand}" ToolTip.Tip="Show all detected speech segments" />
+                    <Button Grid.Column="1" Content="Flagged Violations Only" Command="{Binding FilterFlaggedViolationsOnlyCommand}" ToolTip.Tip="Filter to segments flagged for policy violations" />
+                    <ComboBox Grid.Column="2" HorizontalAlignment="Stretch"
                               ItemsSource="{x:Static vm:ResultsViewModel.SegmentFilterModes}"
                               SelectedItem="{Binding SelectedSegmentFilterMode}" />
-                    <ComboBox Grid.Column="1" HorizontalAlignment="Stretch"
+                    <ComboBox Grid.Column="3" HorizontalAlignment="Stretch"
                               ItemsSource="{Binding AvailableSpeakers}"
                               SelectedItem="{Binding SelectedSpeaker}" />
                 </Grid>

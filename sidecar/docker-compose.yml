@@ -1,0 +1,23 @@
+services:
+  voicescan-inference:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: voicescan-sidecar
+    ports:
+      - "54321:54321"
+    environment:
+      - HF_TOKEN=${HF_TOKEN}
+      - HF_HUB_ENABLE_HF_TRANSFER=1
+      - HF_HOME=/root/.cache/huggingface
+    volumes:
+      - ./cache/huggingface:/root/.cache/huggingface
+      - C:\AudioData:/data:ro
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    restart: unless-stopped

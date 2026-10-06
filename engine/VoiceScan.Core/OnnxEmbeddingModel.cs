@@ -222,10 +222,29 @@ public sealed class OnnxEmbeddingModel : ISpeakerEmbeddingModel
 
         var spec = Supported.FirstOrDefault(s =>
                 s.ModelId.Equals(modelNameOrPath, StringComparison.OrdinalIgnoreCase)
-                || s.Aliases.Contains(modelNameOrPath, StringComparer.OrdinalIgnoreCase))
+                || s.Aliases.Contains(modelNameOrPath, StringComparer.OrdinalIgnoreCase)
+                || s.FileName.Equals(modelNameOrPath, StringComparison.OrdinalIgnoreCase))
             ?? throw new ArgumentException(
                 $"Unknown embedding model '{modelNameOrPath}'. Supported: {string.Join(", ", SupportedModelNames)}.",
                 nameof(modelNameOrPath));
+
+        // 1. AppContext.BaseDirectory/models/
+        string baseDirModel = Path.Combine(AppContext.BaseDirectory, "models", spec.FileName);
+        if (File.Exists(baseDirModel))
+        {
+            return (spec, Path.GetFullPath(baseDirModel));
+        }
+
+        // 2. Repo-root models/
+        string? repoRoot = AppPaths.FindRepoRoot();
+        if (repoRoot != null)
+        {
+            string repoModel = Path.Combine(repoRoot, "models", spec.FileName);
+            if (File.Exists(repoModel))
+            {
+                return (spec, Path.GetFullPath(repoModel));
+            }
+        }
 
         string path = AppPaths.FindModel(spec.FileName)
             ?? throw new FileNotFoundException(

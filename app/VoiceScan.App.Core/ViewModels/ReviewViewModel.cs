@@ -2,6 +2,7 @@ using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.IO;
 using System.Runtime.CompilerServices;
+using System.Windows.Input;
 using VoiceScan.App.Core.Models;
 using VoiceScan.App.Core.Services;
 using VoiceScan.Core.Storage;
@@ -24,12 +25,31 @@ public sealed class ReviewViewModel : INotifyPropertyChanged
 
     public event PropertyChangedEventHandler? PropertyChanged;
 
-    public static readonly IReadOnlyList<string> SegmentFilterModes = ["All Segments", "Offensive / Flagged Only"];
+    public static readonly IReadOnlyList<string> SegmentFilterModes = ["All Segments", "Flagged Violations Only"];
 
     public ObservableCollection<ReviewQueueItem> PendingQueue { get; } = [];
     public ObservableCollection<ReviewQueueItem> FilteredQueue => PendingQueue;
     public ObservableCollection<string> AvailableSpeakers { get; } = ["All Speakers"];
     public ObservableCollection<ReviewDecisionRecord> DecisionHistory { get; } = [];
+
+    public ICommand FilterAllSegmentsCommand { get; }
+    public ICommand FilterFlaggedViolationsOnlyCommand { get; }
+    public ICommand FilterBySpeakerCommand { get; }
+
+    public void FilterAllSegments()
+    {
+        SelectedSegmentFilterMode = "All Segments";
+    }
+
+    public void FilterFlaggedViolationsOnly()
+    {
+        SelectedSegmentFilterMode = "Flagged Violations Only";
+    }
+
+    public void FilterBySpeaker(string? speaker)
+    {
+        SelectedSpeaker = string.IsNullOrWhiteSpace(speaker) ? "All Speakers" : speaker;
+    }
 
     public string SelectedSegmentFilterMode
     {
@@ -80,10 +100,10 @@ public sealed class ReviewViewModel : INotifyPropertyChanged
     }
 
     public string? SpeakerLabel => _selectedItem?.SpeakerLabel;
-    public string? Transcript => _selectedItem?.Transcript;
+    public string Transcript => _selectedItem?.Transcript ?? string.Empty;
     public bool IsFlagged => _selectedItem?.IsFlagged ?? false;
     public bool IsOffensive => _selectedItem?.IsOffensive ?? false;
-    public IReadOnlyList<string>? ModerationViolations => _selectedItem?.ModerationViolations;
+    public IReadOnlyList<string> ModerationViolations => _selectedItem?.ModerationViolations ?? Array.Empty<string>();
 
     public string ReviewerNotes
     {
@@ -124,6 +144,10 @@ public sealed class ReviewViewModel : INotifyPropertyChanged
     {
         _reviewRepository = reviewRepository;
         _playbackController = playbackController;
+
+        FilterAllSegmentsCommand = new RelayCommand(FilterAllSegments);
+        FilterFlaggedViolationsOnlyCommand = new RelayCommand(FilterFlaggedViolationsOnly);
+        FilterBySpeakerCommand = new RelayCommand<string>(FilterBySpeaker);
     }
 
     public async Task InitializeAsync()
@@ -258,9 +282,10 @@ public sealed class ReviewViewModel : INotifyPropertyChanged
     private void ApplyFilter()
     {
         IEnumerable<ReviewQueueItem> query = _allPendingItems;
-        if (string.Equals(_selectedSegmentFilterMode, "Offensive / Flagged Only", StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(_selectedSegmentFilterMode, "Flagged Violations Only", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(_selectedSegmentFilterMode, "Offensive / Flagged Only", StringComparison.OrdinalIgnoreCase))
         {
-            query = query.Where(i => i.IsFlagged);
+            query = query.Where(i => i.IsOffensive || i.IsFlagged || (i.ModerationViolations != null && i.ModerationViolations.Count > 0));
         }
 
         if (!string.Equals(_selectedSpeaker, "All Speakers", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrWhiteSpace(_selectedSpeaker))

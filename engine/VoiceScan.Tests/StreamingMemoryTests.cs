@@ -21,7 +21,7 @@ public class StreamingMemoryTests
 
         var startInfo = new ProcessStartInfo
         {
-            FileName = "ffmpeg",
+            FileName = AudioDecoder.ResolveToolPath("ffmpeg"),
             Arguments = $"-y -v error -f lavfi -i \"sine=frequency=440:sample_rate={sampleRate}:duration=3600\" -f f32le -acodec pcm_f32le -ac 1 -ar {sampleRate} -",
             RedirectStandardOutput = true,
             UseShellExecute = false,

@@ -18,7 +18,8 @@ public static class AppServiceBootstrap
         var enrollmentService = new ProfileEnrollmentService(embeddingModel, vad);
 
         var scanDb = new VoiceScan.Core.Storage.VoiceScanDatabase();
-        var scanner = new PipelineScanner(embeddingModel, vad, scanDb);
+        var sidecarClient = new VoiceScan.Core.Inference.SidecarClient();
+        var scanner = new PipelineScanner(embeddingModel, vad, scanDb, sidecarClient: sidecarClient);
 
         var qualityAnalyzer = new AudioQualityAnalyzer(vad);
         var waveformService = new WaveformService();

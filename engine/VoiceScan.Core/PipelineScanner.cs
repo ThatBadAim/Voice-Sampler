@@ -147,7 +147,15 @@ public sealed class PipelineScanner
                 if (activeSidecar != null)
                 {
                     cancellationToken.ThrowIfCancellationRequested();
-                    cachedSidecarResponse = await activeSidecar.ProcessAudioAsync(mediaFilePath, cancellationToken);
+                    try
+                    {
+                        cachedSidecarResponse = await activeSidecar.ScanAudioAsync(mediaFilePath, cancellationToken);
+                    }
+                    catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
+                    {
+                        Logging.VoiceScanLogger.Warn("PipelineScanner", $"Sidecar scan on cache hit failed: {ex.Message}");
+                        cachedSidecarResponse = null;
+                    }
                     if (cachedSidecarResponse != null && !cachedSidecarResponse.HasSpeech)
                     {
                         var noSpeechResult = new FileScanResult
@@ -258,7 +266,16 @@ public sealed class PipelineScanner
         if (activeSidecar != null)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            sidecarResponse = await activeSidecar.ProcessAudioAsync(mediaFilePath, cancellationToken);
+            try
+            {
+                sidecarResponse = await activeSidecar.ScanAudioAsync(mediaFilePath, cancellationToken);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
+            {
+                Logging.VoiceScanLogger.Warn("PipelineScanner", $"Sidecar scan failed for {mediaFilePath}: {ex.Message}");
+                sidecarResponse = null;
+            }
+
             if (sidecarResponse != null && !sidecarResponse.HasSpeech)
             {
                 double duration = await AudioDecoder.GetMediaDurationSecondsAsync(mediaFilePath, cancellationToken);
@@ -520,7 +537,11 @@ public sealed class PipelineScanner
                     }
 
                     double snrDb = covered.Average(w => w.SnrDb);
-                    reasonFlags = AcousticDiagnostics.EvaluateReasonFlags(duration, snrDb, isCodecDegraded: false);
+                    var acousticFlags = AcousticDiagnostics.EvaluateReasonFlags(duration, snrDb, isCodecDegraded: false);
+                    foreach (var f in acousticFlags)
+                    {
+                        if (!reasonFlags.Contains(f)) reasonFlags.Add(f);
+                    }
 
                     float rawSim = SimilarityScorer.CosineSimilarity(segEmb, targetProfile.Centroid);
                     double score = rawSim;
@@ -554,7 +575,11 @@ public sealed class PipelineScanner
                         var samples = spool.Read(startSample, (int)sampleCount);
                         segEmb = embeddingModel.ExtractEmbedding(samples);
                         double snrDb = AcousticDiagnostics.EstimateSnrDb(samples);
-                        reasonFlags = AcousticDiagnostics.EvaluateReasonFlags(duration, snrDb, isCodecDegraded: false);
+                        var acousticFlags = AcousticDiagnostics.EvaluateReasonFlags(duration, snrDb, isCodecDegraded: false);
+                        foreach (var f in acousticFlags)
+                        {
+                            if (!reasonFlags.Contains(f)) reasonFlags.Add(f);
+                        }
 
                         float rawSim = SimilarityScorer.CosineSimilarity(segEmb, targetProfile.Centroid);
                         double score = rawSim;
@@ -579,6 +604,35 @@ public sealed class PipelineScanner
                         }
                     }
                 }
+                else if (segEmb != null)
+                {
+                    float rawSim = SimilarityScorer.CosineSimilarity(segEmb, targetProfile.Centroid);
+                    double score = rawSim;
+                    if (normalizer != null && targetStats.HasValue)
+                    {
+                        double z = normalizer.NormalizeScoreWithTargetStats(rawSim, targetStats.Value, segEmb);
+                        score = ScoreNormalizer.CalibrateZScoreToConfidence(z);
+                    }
+
+                    confidence = Math.Round(score, 4);
+                    if (confidence >= threshold)
+                    {
+                        verdict = (reasonFlags.Contains("LOW_SNR") && confidence < threshold + 0.03) ? "Possible" : "Match";
+                    }
+                    else if (confidence >= possibleThreshold)
+                    {
+                        verdict = "Possible";
+                    }
+                    else
+                    {
+                        verdict = "No match";
+                    }
+                }
+            }
+
+            if (src.IsOffensive && !reasonFlags.Contains("OFFENSIVE_CONTENT"))
+            {
+                reasonFlags.Add("OFFENSIVE_CONTENT");
             }
 
             mapped.Add(new DetectedSegment
@@ -592,6 +646,7 @@ public sealed class PipelineScanner
                 Transcript = src.Transcript,
                 IsOffensive = src.IsOffensive,
                 ModerationViolations = src.ModerationViolations,
+                ModerationScores = src.ModerationScores,
                 Embedding = segEmb
             });
         }

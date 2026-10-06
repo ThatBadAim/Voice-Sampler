@@ -45,10 +45,11 @@ public sealed record HitSegmentResult(
 {
     public double Start => StartTimeSeconds;
     public double End => EndTimeSeconds;
-    public bool IsFlagged => IsOffensive;
+    public bool IsFlagged => IsOffensive || (ModerationViolations != null && ModerationViolations.Count > 0);
+    public string Transcript { get; init; } = Transcript ?? string.Empty;
     public IReadOnlyList<string> ModerationViolations { get; init; } = ModerationViolations ?? Array.Empty<string>();
 
-    public string ViolationsSummary => ModerationViolations.Count > 0
+    public string ViolationsSummary => (ModerationViolations != null && ModerationViolations.Count > 0)
         ? string.Join(", ", ModerationViolations)
         : (IsOffensive ? "Violation" : string.Empty);
 

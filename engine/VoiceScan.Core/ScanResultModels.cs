@@ -95,9 +95,20 @@ public sealed class FileScanResult
     public float[]? WaveformMaxPeaks { get; set; }
 }
 
-public sealed class DetectedSegment
+public sealed class DetectedSegment : IEquatable<DetectedSegment>
 {
     public DetectedSegment()
+    {
+    }
+
+    public DetectedSegment(
+        double startTimeSeconds,
+        double endTimeSeconds,
+        double confidence,
+        string verdict,
+        List<string>? reasonFlags,
+        float[]? embedding)
+        : this(startTimeSeconds, endTimeSeconds, confidence, verdict, reasonFlags, null, null, false, null, embedding)
     {
     }
 
@@ -142,19 +153,56 @@ public sealed class DetectedSegment
 
     [JsonPropertyName("speaker_label")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public string? SpeakerLabel { get; init; }
+    public string? SpeakerLabel { get; set; }
 
     [JsonPropertyName("transcript")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public string? Transcript { get; init; }
+    public string? Transcript { get; set; }
 
     [JsonPropertyName("is_offensive")]
-    public bool IsOffensive { get; init; }
+    public bool IsOffensive { get; set; }
 
     [JsonPropertyName("moderation_violations")]
-    public IReadOnlyList<string> ModerationViolations { get; init; } = Array.Empty<string>();
+    public IReadOnlyList<string> ModerationViolations { get; set; } = Array.Empty<string>();
+
+    [JsonPropertyName("moderation_scores")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Dictionary<string, double>? ModerationScores { get; set; }
 
     [JsonPropertyName("embedding")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public float[]? Embedding { get; set; }
+
+    public bool Equals(DetectedSegment? other)
+    {
+        if (other is null) return false;
+        if (ReferenceEquals(this, other)) return true;
+        return Math.Abs(StartTimeSeconds - other.StartTimeSeconds) < 1e-6
+            && Math.Abs(EndTimeSeconds - other.EndTimeSeconds) < 1e-6
+            && Math.Abs(Confidence - other.Confidence) < 1e-6
+            && string.Equals(Verdict, other.Verdict, StringComparison.Ordinal)
+            && string.Equals(SpeakerLabel, other.SpeakerLabel, StringComparison.Ordinal)
+            && string.Equals(Transcript, other.Transcript, StringComparison.Ordinal)
+            && IsOffensive == other.IsOffensive
+            && ((ReasonFlags == null && other.ReasonFlags == null) || (ReasonFlags != null && other.ReasonFlags != null && System.Linq.Enumerable.SequenceEqual(ReasonFlags, other.ReasonFlags)))
+            && ((ModerationViolations == null && other.ModerationViolations == null) || (ModerationViolations != null && other.ModerationViolations != null && System.Linq.Enumerable.SequenceEqual(ModerationViolations, other.ModerationViolations)));
+    }
+
+    public override bool Equals(object? obj) => Equals(obj as DetectedSegment);
+
+    public override int GetHashCode()
+    {
+        var hash = new HashCode();
+        hash.Add(StartTimeSeconds);
+        hash.Add(EndTimeSeconds);
+        hash.Add(Confidence);
+        hash.Add(Verdict);
+        hash.Add(SpeakerLabel);
+        hash.Add(Transcript);
+        hash.Add(IsOffensive);
+        return hash.ToHashCode();
+    }
+
+    public static bool operator ==(DetectedSegment? left, DetectedSegment? right) => Equals(left, right);
+    public static bool operator !=(DetectedSegment? left, DetectedSegment? right) => !Equals(left, right);
 }

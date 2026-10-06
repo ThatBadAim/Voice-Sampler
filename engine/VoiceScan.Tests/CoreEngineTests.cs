@@ -140,7 +140,7 @@ public class CoreEngineTests
         var vad = new WebRtcVad();
         float[] speech = AudioDecoder.DecodeEntireFileAsync(Path.Combine(AppContext.BaseDirectory, "fixtures", "jfk_speech.wav")).GetAwaiter().GetResult();
         float[] tone = new float[16000 * 5];
-        for (int i = 0; i < tone.Length; i++) tone[i] = 0.4f * MathF.Sin(2f * MathF.PI * 440f * i / 16000);
+        for (int i = 0; i < tone.Length; i++) tone[i] = 0.4f * MathF.Sin(2f * MathF.PI * 6000f * i / 16000);
 
         Assert.NotEmpty(vad.DetectSpeechIntervals(speech));
         Assert.Empty(vad.DetectSpeechIntervals(tone));

@@ -19,12 +19,19 @@ public static class SetupCheck
         RequiredModelFiles.Where(f => AppPaths.FindModel(f) is null).ToList();
 
     public static IReadOnlyList<string> MissingTools() =>
-        RequiredTools.Where(t => !IsOnPath(t)).ToList();
+        RequiredTools.Where(t => !IsToolAvailable(t)).ToList();
 
     public static string FfmpegInstallHint =>
         OperatingSystem.IsWindows() ? "Install FFmpeg with: winget install Gyan.FFmpeg, then restart VoiceScan."
         : OperatingSystem.IsMacOS() ? "Install FFmpeg with: brew install ffmpeg."
         : "Install FFmpeg with your package manager, for example: sudo apt install ffmpeg (Debian/Ubuntu) or sudo pacman -S ffmpeg (Arch).";
+
+    private static bool IsToolAvailable(string tool)
+    {
+        string resolved = AudioDecoder.ResolveToolPath(tool);
+        if (File.Exists(resolved)) return true;
+        return IsOnPath(tool);
+    }
 
     private static bool IsOnPath(string tool)
     {

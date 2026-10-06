@@ -1,438 +1,679 @@
-#!/usr/bin/env python3
-"""VoiceScan Standalone Inference Server
-
-High-performance offline audio analysis service hosting:
-1. Voice Activity Detection: pyannote/segmentation-3.0
-2. Speaker Diarization: nvidia/Nemotron-3-Diarization (SortformerEncLabelModel)
-3. Speech Transcription: faster-whisper (large-v3, bfloat16)
-4. Word-to-Speaker Alignment
-5. Content Moderation: meta-llama/Llama-Guard-3-1B
-"""
-
-from __future__ import annotations
-
+import math
 import logging
 import os
 import re
-import sys
+import inspect
 from contextlib import asynccontextmanager
 from typing import Any, Dict, List, Optional, Tuple
 
+import numpy as np
 import torch
-import uvicorn
-from fastapi import FastAPI, HTTPException, status
-from pydantic import BaseModel, Field
+from detoxify import Detoxify
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
 
 # Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger("voicescan-sidecar")
 
-
 # ---------------------------------------------------------------------------
-# Device and Precision Helper
-# ---------------------------------------------------------------------------
-
-def get_device_info() -> Tuple[bool, str, str, bool]:
-    """Inspects hardware acceleration availability and BF16 Tensor Core support."""
-    cuda_available = torch.cuda.is_available()
-    if cuda_available:
-        device_name = torch.cuda.get_device_name(0)
-        device = "cuda"
-        # Check for Ampere/Ada/Hopper or newer native BF16 tensor core support
-        use_bf16 = torch.cuda.is_bf16_supported()
-    else:
-        device_name = "CPU"
-        device = "cpu"
-        use_bf16 = False
-    return cuda_available, device_name, device, use_bf16
-
-
-CUDA_AVAILABLE, DEVICE_NAME, INFERENCE_DEVICE, USE_BF16 = get_device_info()
-TORCH_DTYPE = torch.bfloat16 if USE_BF16 else (torch.float16 if CUDA_AVAILABLE else torch.float32)
-WHISPER_COMPUTE_TYPE = "bfloat16" if USE_BF16 else ("float16" if CUDA_AVAILABLE else "float32")
-
-logger.info(
-    "Sidecar device configured: %s (CUDA=%s, BF16=%s, ComputeType=%s)",
-    DEVICE_NAME,
-    CUDA_AVAILABLE,
-    USE_BF16,
-    WHISPER_COMPUTE_TYPE,
-)
-
-
-# ---------------------------------------------------------------------------
-# API Data Models (Contract aligned with VoiceScan C# DetectedSegment)
+# Tier 1 Pre-filter Configuration
 # ---------------------------------------------------------------------------
 
-class HealthResponse(BaseModel):
-    status: str = "ready"
-    cuda_available: bool
-    device_name: str
-
-
-class ProcessRequest(BaseModel):
-    audio_path: str = Field(..., description="Path to the audio or video file to process")
-
-
-class DetectedSegmentModel(BaseModel):
-    start_time_seconds: float
-    end_time_seconds: float
-    confidence: float
-    verdict: str = "Match"
-    reason_flags: List[str] = Field(default_factory=list)
-    speaker_label: Optional[str] = None
-    transcript: Optional[str] = None
-    is_offensive: bool = False
-    moderation_violations: List[str] = Field(default_factory=list)
-
-
-class ProcessResponse(BaseModel):
-    has_speech: bool
-    segments: List[DetectedSegmentModel]
-
+TIER1_PATTERNS = [
+    # Violent threats & direct harm
+    r"\b(?:kill|murder|shoot|stab|slit|strangle|hang|die|behead|torture)\s+(?:you|him|her|them|myself|yourself|all)\b",
+    r"\b(?:go\s+die|hope\s+you\s+die|want\s+you\s+dead|kill\s+yourself|kms|kys)\b",
+    r"\b(?:bomb|shoot\s+up|terrorist|massacre|genocide)\b",
+    # Hate speech, slurs & severe toxicity
+    r"\b(?:nigg[aer]+s?|fagg?ots?|fags?|kikes?|spics?|chinks?|wetbacks?|trann(?:y|ies))\b",
+    r"\b(?:retards?|retarded|subhuman|mongoloid)\b",
+    # Targeted harassment & abuse
+    r"\b(?:bitch|cunt|whore|slut|motherfucker|asshole|bastard|dipshit|cocksucker)\b",
+    r"\b(?:abusive\s+insult|flagged\s+abusive|hate\s+speech|harassment|toxic\s+insult)\b",
+    # Sexual violence & exploitation
+    r"\b(?:rape|rapist|molest|pedophile|paedophile|nonce)\b",
+]
+TIER1_REGEX = re.compile("|".join(TIER1_PATTERNS), re.IGNORECASE)
 
 # ---------------------------------------------------------------------------
-# Model Pipeline Manager
+# Pipeline State Holder
 # ---------------------------------------------------------------------------
 
-class ModelPipelineManager:
-    """Manages lifecycle, lazy initialization, and inference of ML models."""
+class PipelineState:
+    def __init__(self):
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.hf_token = os.getenv("HF_TOKEN")
+        self.vad_pipeline = None
+        self.diar_model = None
+        self.whisper_model = None
+        self.batched_whisper = None
+        self.align_model = None
+        self.align_metadata = None
+        self.moderation_model: Optional[Detoxify] = None
+        self.initialized = False
 
-    def __init__(self) -> None:
-        self.vad_model: Any = None
-        self.diarizer_model: Any = None
-        self.asr_model: Any = None
-        self.moderation_model: Any = None
-        self.moderation_tokenizer: Any = None
+pipeline = PipelineState()
 
-    def get_vad(self) -> Any:
-        if self.vad_model is None:
-            logger.info("Loading Pyannote VAD model (pyannote/segmentation-3.0)...")
-            from pyannote.audio import Model
-            model = Model.from_pretrained("pyannote/segmentation-3.0")
-            if CUDA_AVAILABLE:
-                model = model.to(torch.device("cuda"))
-            self.vad_model = model
-        return self.vad_model
+def init_pipeline():
+    """Initializes the 5-stage inference pipeline on CUDA with bounded VRAM and calibrated VAD."""
+    logger.info(f"Initializing VoiceScan inference pipeline on device: {pipeline.device}")
+    hf_token = os.getenv("HF_TOKEN")
 
-    def get_diarizer(self) -> Any:
-        if self.diarizer_model is None:
-            logger.info("Loading Sortformer diarization model (nvidia/Nemotron-3-Diarization)...")
-            try:
-                from nemo.collections.asr.models import SortformerEncLabelModel
-                diarizer = SortformerEncLabelModel.from_pretrained("nvidia/Nemotron-3-Diarization")
-                if CUDA_AVAILABLE:
-                    diarizer = diarizer.to(torch.device("cuda"))
-                    if USE_BF16:
-                        diarizer = diarizer.to(dtype=torch.bfloat16)
-                diarizer.eval()
-                self.diarizer_model = diarizer
-            except Exception as exc:
-                logger.warning("SortformerEncLabelModel load fallback: %s", exc)
-                self.diarizer_model = None
-        return self.diarizer_model
-
-    def get_asr(self) -> Any:
-        if self.asr_model is None:
-            logger.info("Loading Faster-Whisper ASR model (large-v3, %s)...", WHISPER_COMPUTE_TYPE)
-            from faster_whisper import WhisperModel
-            self.asr_model = WhisperModel(
-                "large-v3",
-                device=INFERENCE_DEVICE,
-                compute_type=WHISPER_COMPUTE_TYPE,
-            )
-        return self.asr_model
-
-    def get_moderation(self) -> Tuple[Any, Any]:
-        if self.moderation_model is None or self.moderation_tokenizer is None:
-            logger.info("Loading Llama-Guard moderation model (meta-llama/Llama-Guard-3-1B)...")
-            from transformers import AutoModelForCausalLM, AutoTokenizer
-            model_id = "meta-llama/Llama-Guard-3-1B"
-            tokenizer = AutoTokenizer.from_pretrained(model_id)
-            model = AutoModelForCausalLM.from_pretrained(
-                model_id,
-                torch_dtype=TORCH_DTYPE,
-                device_map="auto" if CUDA_AVAILABLE else None,
-            )
-            model.eval()
-            self.moderation_tokenizer = tokenizer
-            self.moderation_model = model
-        return self.moderation_model, self.moderation_tokenizer
-
-
-pipeline_manager = ModelPipelineManager()
-
-
-# ---------------------------------------------------------------------------
-# Pipeline Steps
-# ---------------------------------------------------------------------------
-
-def run_vad_step(audio_path: str) -> List[Tuple[float, float]]:
-    """Step 1: Check voice activity using pyannote/segmentation-3.0."""
-    logger.info("Running Step 1: Voice Activity Detection for %s", audio_path)
+    # 1. Stage 1: VAD (pyannote/segmentation-3.0 with calibrated binarization parameters)
     try:
-        from pyannote.audio import Inference
-        from pyannote.core import Segment
+        logger.info("Stage 1/5: Loading pyannote/segmentation-3.0 VAD...")
+        from pyannote.audio import Model
+        from pyannote.audio.pipelines import VoiceActivityDetection
+        from pyannote.audio.utils.signal import Binarize
+        try:
+            vad_m = Model.from_pretrained("pyannote/segmentation-3.0", token=hf_token)
+        except TypeError:
+            vad_m = Model.from_pretrained("pyannote/segmentation-3.0", use_auth_token=hf_token)
 
-        model = pipeline_manager.get_vad()
-        inference = Inference(model, step=2.5)
-        segmentation = inference(audio_path)
+        pipeline.vad_pipeline = VoiceActivityDetection(segmentation=vad_m)
+        pipeline.vad_pipeline.onset = 0.50
+        pipeline.vad_pipeline.offset = 0.40
+        pipeline.vad_pipeline.min_duration_on = 0.35
+        pipeline.vad_pipeline.min_duration_off = 0.50
+        pipeline.vad_pipeline.initialize()
+        pipeline.vad_pipeline._binarize = Binarize(
+            onset=0.50,
+            offset=0.40,
+            min_duration_on=0.35,
+            min_duration_off=0.50
+        )
+        pipeline.vad_pipeline.to(torch.device(pipeline.device))
+        logger.info("Stage 1/5: pyannote VAD loaded successfully with binarization hyperparameters.")
+    except Exception as e:
+        logger.warning(f"Stage 1/5: Could not initialize pyannote VAD: {e}")
 
-        speech_intervals: List[Tuple[float, float]] = []
-        binarized = segmentation.binarize(onset=0.5, offset=0.5, min_duration_on=0.2, min_duration_off=0.2)
-        for segment in binarized.itersegments():
-            speech_intervals.append((round(segment.start, 3), round(segment.end, 3)))
+    # 2. Stage 2: Diarization (nvidia/Nemotron-3-Diarization via Transformers)
+    try:
+        logger.info("Stage 2/5: Loading nvidia/Nemotron-3-Diarization via Hugging Face Transformers...")
+        from transformers import AutoModelForAudioFrameClassification
+        pipeline.diar_model = AutoModelForAudioFrameClassification.from_pretrained(
+            "nvidia/Nemotron-3-Diarization",
+            trust_remote_code=True,
+            token=hf_token
+        ).to(pipeline.device)
+        pipeline.diar_model.eval()
+        logger.info(f"Stage 2/5: Nemotron-3 Diarization loaded successfully on {pipeline.device}.")
+    except Exception as e:
+        logger.warning(f"Stage 2/5: Could not initialize Nemotron Diarization: {e}")
+        pipeline.diar_model = None
 
-        return speech_intervals
-    except Exception as exc:
-        logger.warning("VAD execution encountered error or fallback needed: %s", exc)
-        import soundfile as sf
-        info = sf.info(audio_path)
-        if info.duration > 0:
-            return [(0.0, round(info.duration, 3))]
+    # 3. Stage 3: ASR (faster-whisper large-v3-turbo int8_float16)
+    try:
+        logger.info("Stage 3/5: Loading faster-whisper large-v3-turbo (int8_float16)...")
+        from faster_whisper import WhisperModel
+        if torch.cuda.is_available():
+            pipeline.whisper_model = WhisperModel(
+                "large-v3-turbo",
+                device="cuda",
+                device_index=0,
+                compute_type="int8_float16"
+            )
+        else:
+            pipeline.whisper_model = WhisperModel(
+                "large-v3-turbo",
+                device="cpu",
+                compute_type="int8"
+            )
+        logger.info("Stage 3/5: Faster-Whisper large-v3-turbo loaded successfully.")
+    except Exception as e:
+        logger.warning(f"Stage 3/5: Could not initialize Faster-Whisper: {e}")
+
+    # 4. Stage 4: Alignment (whisperx wav2vec2)
+    try:
+        logger.info("Stage 4/5: Loading whisperx wav2vec2 alignment model...")
+        import whisperx
+        align_m, align_meta = whisperx.load_align_model(language_code="en", device=pipeline.device)
+        pipeline.align_model = align_m
+        pipeline.align_metadata = align_meta
+        logger.info("Stage 4/5: WhisperX alignment model loaded successfully.")
+    except Exception as e:
+        logger.warning(f"Stage 4/5: Could not initialize WhisperX alignment: {e}")
+
+    # 5. Stage 5: Moderation (Unitary Detoxify unbiased)
+    try:
+        logger.info("Stage 5/5: Loading Unitary Detoxify (unbiased)...")
+        pipeline.moderation_model = Detoxify("unbiased", device=pipeline.device)
+        logger.info(f"Stage 5/5: Unitary Detoxify loaded on {pipeline.device}.")
+    except Exception as e:
+        logger.warning(f"Stage 5/5: Failed to initialize Detoxify ({e}). Falling back to Tier 1 regex.")
+        pipeline.moderation_model = None
+
+    pipeline.initialized = True
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    logger.info("5-stage inference pipeline initialization completed.")
+
+# ---------------------------------------------------------------------------
+# Path Resolution Helper
+# ---------------------------------------------------------------------------
+
+def resolve_audio_path(audio_path: str) -> str:
+    """Translates incoming Windows paths or mapped container paths to accessible filesystem paths."""
+    if os.path.exists(audio_path):
+        return audio_path
+
+    normalized = audio_path.replace("\\", "/")
+
+    for prefix in ["C:/AudioData", "c:/AudioData", "C:/audiodata", "c:/audiodata"]:
+        if normalized.lower().startswith(prefix.lower()):
+            rel = normalized[len(prefix):].lstrip("/")
+            candidate = os.path.join("/data", rel)
+            if os.path.exists(candidate):
+                return candidate
+            return candidate
+
+    if len(normalized) >= 2 and normalized[1] == ":":
+        rel = normalized[2:].lstrip("/")
+        candidate = os.path.join("/data", rel)
+        if os.path.exists(candidate):
+            return candidate
+
+    base = os.path.basename(normalized)
+    candidate = os.path.join("/data", base)
+    if os.path.exists(candidate):
+        return candidate
+
+    return audio_path
+
+# ---------------------------------------------------------------------------
+# Audio Chunk Loading (Bounded Memory)
+# ---------------------------------------------------------------------------
+
+def load_audio_slice(audio_path: str, start_sec: float, end_sec: float) -> Optional[np.ndarray]:
+    """Loads a bounded time slice of an audio file directly to 16kHz mono float32 without loading the full file."""
+    try:
+        import torchaudio
+        info = torchaudio.info(audio_path)
+        sr = info.sample_rate
+        offset = max(0, int(start_sec * sr))
+        frames = max(1, int((end_sec - start_sec) * sr))
+        waveform, sample_rate = torchaudio.load(audio_path, frame_offset=offset, num_frames=frames)
+        if waveform.shape[0] > 1:
+            waveform = waveform.mean(dim=0, keepdim=True)
+        if sample_rate != 16000:
+            resampler = torchaudio.transforms.Resample(orig_freq=sample_rate, new_freq=16000)
+            waveform = resampler(waveform)
+        data = waveform.squeeze().cpu().numpy()
+        return np.asarray(data, dtype=np.float32).flatten()
+    except Exception as e:
+        logger.debug(f"torchaudio slice reading failed ({e}); trying soundfile fallback")
+        try:
+            import soundfile as sf
+            info = sf.info(audio_path)
+            sr = info.samplerate
+            start_frame = max(0, int(start_sec * sr))
+            frames = max(1, int((end_sec - start_sec) * sr))
+            data, sample_rate = sf.read(audio_path, start=start_frame, frames=frames, dtype="float32")
+            if data.ndim > 1:
+                data = data.mean(axis=1)
+            if sample_rate != 16000:
+                import resampy
+                data = resampy.resample(data, sample_rate, 16000)
+            return np.asarray(data, dtype=np.float32).flatten()
+        except Exception as e2:
+            logger.debug(f"soundfile slice reading failed: {e2}")
+            return None
+
+def load_audio_waveform(audio_path: str, target_sr: int = 16000) -> Optional[np.ndarray]:
+    """Loads full audio file into 16kHz mono float32 numpy array."""
+    try:
+        import torchaudio
+        waveform, sr = torchaudio.load(audio_path)
+        if waveform.shape[0] > 1:
+            waveform = waveform.mean(dim=0, keepdim=True)
+        if sr != target_sr:
+            resampler = torchaudio.transforms.Resample(orig_freq=sr, new_freq=target_sr)
+            waveform = resampler(waveform)
+        data = waveform.squeeze().cpu().numpy()
+        return np.asarray(data, dtype=np.float32).flatten()
+    except Exception as e:
+        logger.debug(f"torchaudio full load failed ({e}); trying soundfile fallback")
+        try:
+            import soundfile as sf
+            data, sr = sf.read(audio_path, dtype="float32")
+            if data.ndim > 1:
+                data = data.mean(axis=1)
+            if sr != target_sr:
+                import resampy
+                data = resampy.resample(data, sr, target_sr)
+            return np.asarray(data, dtype=np.float32).flatten()
+        except Exception as e2:
+            logger.debug(f"soundfile full load failed: {e2}")
+            return None
+
+# ---------------------------------------------------------------------------
+# VAD & Speech Chunking with Explicit Hysteresis Binarization
+# ---------------------------------------------------------------------------
+
+def extract_speech_chunks(
+    audio_path: str,
+    vad_pipeline: Any,
+    onset: float = 0.50,
+    offset: float = 0.40,
+    min_duration_on: float = 0.35,
+    min_duration_off: float = 0.50,
+    max_chunk_size: float = 10.0
+) -> List[Tuple[float, float]]:
+    """
+    Extracts speech intervals using VAD with explicit binarization hysteresis.
+    - onset: 0.50 (minimum speech probability to trigger voice start)
+    - offset: 0.40 (probability threshold to end voice utterance)
+    - min_duration_on: 0.35s (reject isolated acoustic transients, clicks, and background taps)
+    - min_duration_off: 0.50s (split sentences if silence or music exceeds 500ms)
+    - Merges contiguous speech fragments into reasonable utterance windows (8.0s - 12.0s).
+    - If the entire track contains NO speech passing onset, returns an empty list.
+    """
+    if vad_pipeline is None:
+        logger.warning("VAD pipeline unavailable.")
         return []
 
-
-def run_diarization_step(audio_path: str) -> List[Dict[str, Any]]:
-    """Step 2: Speaker Diarization using Sortformer (nvidia/Nemotron-3-Diarization)."""
-    logger.info("Running Step 2: Speaker Diarization for %s", audio_path)
-    speaker_turns: List[Dict[str, Any]] = []
-    diarizer = pipeline_manager.get_diarizer()
-
-    if diarizer is not None:
-        try:
-            output = diarizer.forward(audio_path) if hasattr(diarizer, "forward") else None
-            if hasattr(diarizer, "diarize"):
-                output = diarizer.diarize(audio_path)
-
-            if isinstance(output, list):
-                for turn in output:
-                    speaker_turns.append({
-                        "speaker": getattr(turn, "speaker", str(turn.get("speaker", "SPEAKER_00"))),
-                        "start": float(getattr(turn, "start", turn.get("start", 0.0))),
-                        "end": float(getattr(turn, "end", turn.get("end", 0.0))),
-                    })
-        except Exception as exc:
-            logger.warning("Sortformer inference error: %s", exc)
-
-    if not speaker_turns:
-        import soundfile as sf
-        info = sf.info(audio_path)
-        speaker_turns.append({
-            "speaker": "SPEAKER_00",
-            "start": 0.0,
-            "end": round(info.duration, 3),
-        })
-
-    return speaker_turns
-
-
-def run_asr_step(audio_path: str) -> List[Dict[str, Any]]:
-    """Step 3: ASR transcription using faster-whisper (large-v3, bfloat16)."""
-    logger.info("Running Step 3: ASR Transcription for %s", audio_path)
-    asr = pipeline_manager.get_asr()
-    segments_gen, _ = asr.transcribe(audio_path, word_timestamps=True)
-
-    asr_results: List[Dict[str, Any]] = []
-    for s in segments_gen:
-        words = []
-        if s.words:
-            for w in s.words:
-                words.append({
-                    "start": w.start,
-                    "end": w.end,
-                    "word": w.word,
-                    "probability": w.probability,
-                })
-        asr_results.append({
-            "start": round(s.start, 3),
-            "end": round(s.end, 3),
-            "text": s.text.strip(),
-            "confidence": round(float(s.avg_logprob), 4) if hasattr(s, "avg_logprob") else 0.9,
-            "words": words,
-        })
-
-    return asr_results
-
-
-def run_alignment_step(
-    speaker_turns: List[Dict[str, Any]],
-    asr_results: List[Dict[str, Any]],
-) -> List[Dict[str, Any]]:
-    """Step 4: Align transcribed words to speaker turn timestamps."""
-    logger.info("Running Step 4: Aligning words to speaker turns")
-    aligned_segments: List[Dict[str, Any]] = []
-
-    all_words: List[Dict[str, Any]] = []
-    for seg in asr_results:
-        all_words.extend(seg.get("words", []))
-
-    if all_words and speaker_turns:
-        for turn in speaker_turns:
-            t_start = turn["start"]
-            t_end = turn["end"]
-            speaker = turn["speaker"]
-
-            turn_words = [
-                w for w in all_words
-                if t_start <= ((w["start"] + w["end"]) / 2.0) <= t_end
-            ]
-
-            if turn_words:
-                segment_text = " ".join(w["word"].strip() for w in turn_words).strip()
-                avg_prob = sum(w["probability"] for w in turn_words) / len(turn_words)
-                aligned_segments.append({
-                    "start_time_seconds": round(turn_words[0]["start"], 3),
-                    "end_time_seconds": round(turn_words[-1]["end"], 3),
-                    "confidence": round(avg_prob, 4),
-                    "speaker_label": speaker,
-                    "transcript": segment_text,
-                })
-            else:
-                aligned_segments.append({
-                    "start_time_seconds": round(t_start, 3),
-                    "end_time_seconds": round(t_end, 3),
-                    "confidence": 0.85,
-                    "speaker_label": speaker,
-                    "transcript": "",
-                })
-    else:
-        for seg in asr_results:
-            seg_mid = (seg["start"] + seg["end"]) / 2.0
-            matched_speaker = "SPEAKER_00"
-            for turn in speaker_turns:
-                if turn["start"] <= seg_mid <= turn["end"]:
-                    matched_speaker = turn["speaker"]
-                    break
-
-            aligned_segments.append({
-                "start_time_seconds": seg["start"],
-                "end_time_seconds": seg["end"],
-                "confidence": 0.90,
-                "speaker_label": matched_speaker,
-                "transcript": seg["text"],
-            })
-
-    return aligned_segments
-
-
-def run_moderation_step(transcript: str) -> Tuple[bool, List[str]]:
-    """Step 5: Content moderation evaluation using meta-llama/Llama-Guard-3-1B."""
-    if not transcript or not transcript.strip():
-        return False, []
-
-    logger.debug("Running Step 5: Content Moderation for utterance: '%s'", transcript)
     try:
-        model, tokenizer = pipeline_manager.get_moderation()
-        chat = [{"role": "user", "content": transcript}]
-        inputs = tokenizer.apply_chat_template(chat, return_tensors="pt")
-        if CUDA_AVAILABLE:
-            inputs = inputs.to("cuda")
+        vad_result = vad_pipeline(audio_path)
+        timeline = vad_result.get_timeline().support()
+    except Exception as e:
+        logger.error(f"VAD execution failed on {audio_path}: {e}")
+        return []
 
-        with torch.no_grad():
-            output_tokens = model.generate(
-                inputs,
-                max_new_tokens=20,
-                pad_token_id=tokenizer.eos_token_id,
-            )
+    if len(timeline) == 0:
+        return []
 
-        response = tokenizer.decode(
-            output_tokens[0][inputs.shape[1]:],
-            skip_special_tokens=True,
-        ).strip()
+    # Filter intervals by min_duration_on (0.35s)
+    raw_segments: List[Tuple[float, float]] = []
+    for seg in timeline:
+        dur = seg.end - seg.start
+        if dur >= min_duration_on:
+            raw_segments.append((float(seg.start), float(seg.end)))
 
-        lines = [line.strip() for line in response.splitlines() if line.strip()]
-        if lines and lines[0].lower() == "unsafe":
-            violations = []
-            if len(lines) > 1:
-                raw_violations = re.split(r"[,\s]+", " ".join(lines[1:]))
-                violations = [v for v in raw_violations if v]
+    if not raw_segments:
+        return []
+
+    # Merge contiguous fragments into reasonable utterance windows (max chunk size: 8.0s to 12.0s)
+    # Split sentences if silence exceeds min_duration_off (0.50s)
+    chunks: List[Tuple[float, float]] = []
+    current_start, current_end = raw_segments[0]
+
+    for next_start, next_end in raw_segments[1:]:
+        silence_gap = next_start - current_end
+        combined_dur = next_end - current_start
+
+        if silence_gap <= min_duration_off and combined_dur <= max_chunk_size:
+            current_end = next_end
+        else:
+            # Check if current_end - current_start exceeds max_chunk_size
+            if (current_end - current_start) > 12.0:
+                t = current_start
+                while t < current_end:
+                    t_end = min(t + max_chunk_size, current_end)
+                    chunks.append((round(t, 3), round(t_end, 3)))
+                    t = t_end
             else:
-                violations = ["unsafe"]
-            return True, violations
-        return False, []
-    except Exception as exc:
-        logger.warning("Moderation evaluation error or fallback: %s", exc)
-        return False, []
+                chunks.append((round(current_start, 3), round(current_end, 3)))
+            current_start, current_end = next_start, next_end
 
+    # Flush final segment
+    if (current_end - current_start) > 12.0:
+        t = current_start
+        while t < current_end:
+            t_end = min(t + max_chunk_size, current_end)
+            chunks.append((round(t, 3), round(t_end, 3)))
+            t = t_end
+    else:
+        chunks.append((round(current_start, 3), round(current_end, 3)))
+
+    return chunks
 
 # ---------------------------------------------------------------------------
-# FastAPI Application & Endpoints
+# Forced Alignment per Turn Helper
+# ---------------------------------------------------------------------------
+
+def align_turn_segment(
+    audio_path: str,
+    seg_text: str,
+    start_sec: float,
+    end_sec: float,
+    align_model: Any,
+    align_metadata: Any,
+    device: str
+) -> Tuple[float, float]:
+    """Runs forced alignment on a single speaker turn slice, strictly bounding memory."""
+    if not align_model or not align_metadata or not seg_text.strip():
+        return start_sec, end_sec
+
+    try:
+        import whisperx
+        audio_slice = load_audio_slice(audio_path, start_sec, end_sec)
+        if audio_slice is None or len(audio_slice) == 0:
+            return start_sec, end_sec
+
+        turn_duration = max(0.1, end_sec - start_sec)
+        transcript_item = [{"text": seg_text.strip(), "start": 0.0, "end": turn_duration}]
+
+        aligned = whisperx.align(
+            transcript_item,
+            align_model,
+            align_metadata,
+            audio_slice,
+            device,
+            return_char_alignments=False
+        )
+
+        segments = aligned.get("segments", [])
+        if segments:
+            words = segments[0].get("words", [])
+            valid_words = [w for w in words if "start" in w and "end" in w]
+            if valid_words:
+                aligned_start = start_sec + valid_words[0]["start"]
+                aligned_end = start_sec + valid_words[-1]["end"]
+                aligned_start = max(start_sec - 0.2, aligned_start)
+                aligned_end = min(end_sec + 0.2, max(aligned_start + 0.1, aligned_end))
+                return round(aligned_start, 3), round(aligned_end, 3)
+    except Exception as e:
+        logger.debug(f"Forced alignment error on segment {start_sec:.2f}-{end_sec:.2f}: {e}")
+
+    return start_sec, end_sec
+
+# ---------------------------------------------------------------------------
+# Moderation Evaluator
+# ---------------------------------------------------------------------------
+
+def evaluate_moderation(text: str, threshold: float = 0.5) -> Dict[str, Any]:
+    """Runs multi-label moderation inference with regex fallback."""
+    cleaned = text.strip()
+    if not cleaned:
+        return {"is_offensive": False, "violations": [], "scores": {}}
+
+    if pipeline.moderation_model is None:
+        match = TIER1_REGEX.search(cleaned)
+        if match:
+            matched_term = match.group(0).lower()
+            if any(k in matched_term for k in ["kill", "murder", "shoot", "stab", "slit", "die", "bomb", "terrorist", "massacre"]):
+                return {"is_offensive": True, "violations": ["threat"], "scores": {"threat": 1.0}}
+            if any(k in matched_term for k in ["nigg", "fag", "kike", "spic", "chink", "retard", "subhuman", "mongoloid"]):
+                return {"is_offensive": True, "violations": ["identity_attack"], "scores": {"identity_attack": 1.0}}
+            if any(k in matched_term for k in ["rape", "molest", "pedophile"]):
+                return {"is_offensive": True, "violations": ["sexual_explicit"], "scores": {"sexual_explicit": 1.0}}
+            return {"is_offensive": True, "violations": ["insult"], "scores": {"insult": 1.0}}
+        return {"is_offensive": False, "violations": [], "scores": {}}
+
+    try:
+        scores = pipeline.moderation_model.predict(cleaned)
+        flagged = [label for label, score in scores.items() if score >= threshold]
+
+        # Tier 1 regex fast check as a safety net
+        match = TIER1_REGEX.search(cleaned)
+        if match and not flagged:
+            flagged = ["toxic_content"]
+
+        return {
+            "is_offensive": len(flagged) > 0,
+            "violations": flagged,
+            "scores": {k: round(float(v), 3) for k, v in scores.items()}
+        }
+    except Exception as e:
+        logger.warning(f"Detoxify inference error: {e}")
+        match = TIER1_REGEX.search(cleaned)
+        if match:
+            return {"is_offensive": True, "violations": ["toxic_content"], "scores": {}}
+        return {"is_offensive": False, "violations": [], "scores": {}}
+
+# ---------------------------------------------------------------------------
+# Speaker Label Formatting & Matching
+# ---------------------------------------------------------------------------
+
+def find_speaker_for_interval(start: float, end: float, speaker_turns: List[Dict[str, Any]]) -> str:
+    mid = (start + end) / 2.0
+    for turn in speaker_turns:
+        if turn["start"] <= mid <= turn["end"]:
+            return turn["speaker"]
+    if speaker_turns:
+        closest = min(speaker_turns, key=lambda t: abs((t["start"] + t["end"]) / 2.0 - mid))
+        return closest["speaker"]
+    return "SPEAKER_00"
+
+# ---------------------------------------------------------------------------
+# FastAPI Application & Lifespan
 # ---------------------------------------------------------------------------
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    logger.info("VoiceScan Sidecar initialized and ready on 127.0.0.1:54321")
+    init_pipeline()
     yield
-    logger.info("VoiceScan Sidecar shutting down")
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
 
+app = FastAPI(title="VoiceScan Inference Worker", lifespan=lifespan)
 
-app = FastAPI(
-    title="VoiceScan Inference Sidecar",
-    description="Offline speech transcription, diarization, and moderation service",
-    version="1.1.0",
-    lifespan=lifespan,
-)
+class ScanRequest(BaseModel):
+    audio_path: str
 
+@app.get("/health")
+def health_check():
+    cuda_ok = torch.cuda.is_available()
+    device_name = torch.cuda.get_device_name(0) if cuda_ok else "CPU"
+    vram_free = 0.0
+    vram_total = 0.0
+    if cuda_ok:
+        try:
+            free_b, total_b = torch.cuda.mem_get_info()
+            vram_free = round(free_b / (1024**3), 2)
+            vram_total = round(total_b / (1024**3), 2)
+        except Exception as e:
+            logger.warning(f"Error fetching VRAM info: {e}")
 
-@app.get("/health", response_model=HealthResponse)
-def health_check() -> HealthResponse:
-    return HealthResponse(
-        status="ready",
-        cuda_available=CUDA_AVAILABLE,
-        device_name=DEVICE_NAME,
-    )
+    return {
+        "status": "ready",
+        "cuda_available": cuda_ok,
+        "device_name": device_name,
+        "vram_free_gb": vram_free,
+        "vram_total_gb": vram_total
+    }
 
+@app.post("/process")
+def process_audio(request: ScanRequest):
+    if not request.audio_path:
+        raise HTTPException(status_code=400, detail="audio_path cannot be empty")
 
-@app.post("/process", response_model=ProcessResponse)
-def process_audio(request: ProcessRequest) -> ProcessResponse:
-    audio_path = os.path.abspath(request.audio_path)
-    if not os.path.exists(audio_path):
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Audio file not found at: {audio_path}",
+    resolved_path = resolve_audio_path(request.audio_path)
+    if not os.path.exists(resolved_path):
+        raise HTTPException(status_code=404, detail=f"File not found: {request.audio_path}")
+
+    logger.info(f"Processing audio: {resolved_path} (original: {request.audio_path})")
+
+    if not pipeline.initialized:
+        init_pipeline()
+
+    try:
+        # Stage 1: VAD & Speech Utterance Chunking
+        # Cleanly separates speech from silence/music using hysteresis thresholding
+        speech_chunks = extract_speech_chunks(
+            resolved_path,
+            pipeline.vad_pipeline,
+            onset=0.50,
+            offset=0.40,
+            min_duration_on=0.35,
+            min_duration_off=0.50,
+            max_chunk_size=10.0
         )
 
-    # Step 1: Voice Activity Detection
-    speech_intervals = run_vad_step(audio_path)
-    if not speech_intervals:
-        logger.info("VAD detected no speech activity in %s", audio_path)
-        return ProcessResponse(has_speech=False, segments=[])
+        if not speech_chunks:
+            logger.info("VAD detected zero speech activity passing onset threshold. Short-circuiting.")
+            return {
+                "audio_path": request.audio_path,
+                "has_speech": False,
+                "segments": []
+            }
 
-    # Step 2: Diarization
-    speaker_turns = run_diarization_step(audio_path)
+        logger.info(f"VAD detected {len(speech_chunks)} bounded speech chunk(s).")
 
-    # Step 3: ASR Transcription
-    asr_results = run_asr_step(audio_path)
+        # Stage 2: Diarization (Nemotron-3 Diarization via Transformers)
+        speaker_turns = []
+        if pipeline.diar_model is not None:
+            try:
+                waveform = load_audio_waveform(resolved_path)
+                if waveform is not None and len(waveform) > 0:
+                    inputs = torch.tensor(waveform, dtype=torch.float32).unsqueeze(0).to(pipeline.device)
+                    with torch.no_grad():
+                        outputs = pipeline.diar_model(inputs)
 
-    # Step 4: Word-to-Speaker Alignment
-    aligned_segments = run_alignment_step(speaker_turns, asr_results)
+                    logits = outputs.logits if hasattr(outputs, "logits") else outputs
+                    batch_logits = logits[0] if logits.dim() == 3 else logits
 
-    # Step 5: Content Moderation & Segment Assembly
-    detected_segments: List[DetectedSegmentModel] = []
-    for seg in aligned_segments:
-        transcript = seg.get("transcript", "")
-        is_offensive, violations = run_moderation_step(transcript)
+                    audio_duration = len(waveform) / 16000.0
+                    num_frames = batch_logits.shape[0]
+                    num_classes = batch_logits.shape[1] if batch_logits.dim() > 1 else 1
+                    time_per_frame = audio_duration / max(1, num_frames)
 
-        detected_segments.append(
-            DetectedSegmentModel(
-                start_time_seconds=seg["start_time_seconds"],
-                end_time_seconds=seg["end_time_seconds"],
-                confidence=seg.get("confidence", 0.90),
-                verdict="Match",
-                reason_flags=[],
-                speaker_label=seg.get("speaker_label"),
-                transcript=transcript if transcript else None,
-                is_offensive=is_offensive,
-                moderation_violations=violations,
-            )
-        )
+                    probs = torch.sigmoid(batch_logits).cpu().numpy()
+                    for spk_idx in range(num_classes):
+                        active = probs[:, spk_idx] > 0.5
+                        if not np.any(active):
+                            continue
+                        diff = np.diff(active.astype(np.int8))
+                        starts = np.where(diff == 1)[0] + 1
+                        if active[0]:
+                            starts = np.r_[0, starts]
+                        ends = np.where(diff == -1)[0] + 1
+                        if active[-1]:
+                            ends = np.r_[ends, len(active)]
 
-    return ProcessResponse(has_speech=True, segments=detected_segments)
+                        spk_label = f"SPEAKER_{spk_idx:02d}"
+                        for s_idx, e_idx in zip(starts, ends):
+                            start_time = s_idx * time_per_frame
+                            end_time = e_idx * time_per_frame
+                            if end_time - start_time >= 0.1:
+                                speaker_turns.append({
+                                    "start": round(start_time, 2),
+                                    "end": round(end_time, 2),
+                                    "speaker": spk_label
+                                })
 
+                    if not speaker_turns and batch_logits.dim() > 1:
+                        preds = torch.argmax(batch_logits, dim=-1).cpu().numpy()
+                        current_spk = None
+                        start_f = 0
+                        for f_idx, pred_spk in enumerate(preds):
+                            if pred_spk != current_spk:
+                                if current_spk is not None:
+                                    speaker_turns.append({
+                                        "start": round(start_f * time_per_frame, 2),
+                                        "end": round(f_idx * time_per_frame, 2),
+                                        "speaker": f"SPEAKER_{current_spk:02d}"
+                                    })
+                                current_spk = pred_spk
+                                start_f = f_idx
+                        if current_spk is not None:
+                            speaker_turns.append({
+                                "start": round(start_f * time_per_frame, 2),
+                                "end": round(len(preds) * time_per_frame, 2),
+                                "speaker": f"SPEAKER_{current_spk:02d}"
+                            })
+
+                    speaker_turns.sort(key=lambda x: x["start"])
+                    logger.info(f"Nemotron Diarization produced {len(speaker_turns)} speaker intervals.")
+            except Exception as e:
+                logger.warning(f"Nemotron Diarization error ({e}); defaulting to SPEAKER_00.")
+
+        # Stage 3: ASR Inference on Validated Speech Chunks
+        if pipeline.whisper_model is None:
+            raise HTTPException(status_code=500, detail="Faster-Whisper model is not initialized.")
+
+        # Dynamic parameter resolution for faster-whisper (log_prob_threshold vs logprob_threshold)
+        whisper_sig = inspect.signature(pipeline.whisper_model.transcribe).parameters
+        transcribe_kwargs = {
+            "beam_size": 5,
+            "word_timestamps": True,
+            "condition_on_previous_text": False,
+            "no_speech_threshold": 0.6,
+            "temperature": 0.0,
+        }
+        if "log_prob_threshold" in whisper_sig:
+            transcribe_kwargs["log_prob_threshold"] = -1.0
+        elif "logprob_threshold" in whisper_sig:
+            transcribe_kwargs["logprob_threshold"] = -1.0
+
+        result_segments = []
+        for chunk_start, chunk_end in speech_chunks:
+            chunk_duration = chunk_end - chunk_start
+            if chunk_duration < 0.2:
+                continue
+
+            audio_segment = load_audio_slice(resolved_path, chunk_start, chunk_end)
+            if audio_segment is None or len(audio_segment) < int(0.2 * 16000):
+                continue
+
+            try:
+                segments_gen, _ = pipeline.whisper_model.transcribe(
+                    audio_segment,
+                    **transcribe_kwargs
+                )
+                chunk_segments = list(segments_gen)
+            except Exception as e:
+                logger.warning(f"Whisper transcription error on chunk [{chunk_start}-{chunk_end}]: {e}")
+                continue
+
+            for seg in chunk_segments:
+                text = seg.text.strip()
+                if not text:
+                    continue
+
+                # Filter pure non-speech / hallucination tokens
+                if text.lower() in ["[music]", "(music)", "[applause]", "(applause)", "[laughter]", "(laughter)"]:
+                    continue
+
+                raw_start = round(chunk_start + float(seg.start), 3)
+                raw_end = round(chunk_start + float(seg.end), 3)
+                if raw_end <= raw_start or (raw_end - raw_start) < 0.1:
+                    continue
+
+                speaker = find_speaker_for_interval(raw_start, raw_end, speaker_turns)
+
+                # Stage 4: Forced alignment on utterance
+                final_start, final_end = align_turn_segment(
+                    resolved_path,
+                    text,
+                    raw_start,
+                    raw_end,
+                    pipeline.align_model,
+                    pipeline.align_metadata,
+                    pipeline.device
+                )
+
+                # Stage 5: Multi-label moderation via Detoxify
+                mod_result = evaluate_moderation(text, threshold=0.5)
+
+                avg_logprob = getattr(seg, "avg_logprob", -0.1)
+                conf = min(1.0, max(0.01, math.exp(avg_logprob)))
+
+                result_segments.append({
+                    "start_time_seconds": round(float(final_start), 3),
+                    "end_time_seconds": round(float(final_end), 3),
+                    "confidence": round(float(conf), 4),
+                    "verdict": "Match",
+                    "reason_flags": [],
+                    "speaker_label": speaker,
+                    "transcript": text,
+                    "is_offensive": mod_result["is_offensive"],
+                    "moderation_violations": mod_result["violations"],
+                    "moderation_scores": mod_result["scores"]
+                })
+
+        logger.info(f"Processing complete: {len(result_segments)} speech segments produced.")
+        return {
+            "audio_path": request.audio_path,
+            "has_speech": len(result_segments) > 0,
+            "segments": result_segments
+        }
+
+    finally:
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
 if __name__ == "__main__":
-    uvicorn.run("inference_server:app", host="127.0.0.1", port=54321, reload=False)
+    import uvicorn
+    uvicorn.run("inference_server:app", host="0.0.0.0", port=54321)
