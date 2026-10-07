@@ -1,0 +1,183 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:VoiceScan.App.Core.ViewModels"
+             xmlns:m="using:VoiceScan.App.Core.Models"
+             x:Class="VoiceScan.App.Views.ClipsView"
+             x:DataType="vm:ClipsViewModel">
+
+    <Grid x:Name="Split" ColumnDefinitions="420,40,*">
+        <Border x:Name="ListPane" Classes="panel">
+            <DockPanel>
+                <StackPanel DockPanel.Dock="Top" Spacing="12" Margin="0,0,0,16">
+                    <TextBlock Text="Clips" Classes="heading" />
+                    <TextBox Text="{Binding SearchText}" PlaceholderText="Search by file name" />
+                    <CheckBox Content="Only clips with incidents" IsChecked="{Binding OnlyWithIncidents}" />
+                </StackPanel>
+
+                <Border DockPanel.Dock="Top" Classes="callout" IsVisible="{Binding IsEmpty}">
+                    <TextBlock TextWrapping="Wrap" Text="No clips yet. Every recording you scan is listed here." />
+                </Border>
+
+                <ListBox ItemsSource="{Binding Clips}" SelectedItem="{Binding SelectedClip}">
+                    <ListBox.ItemTemplate>
+                        <DataTemplate x:DataType="m:ClipItem">
+                            <StackPanel Spacing="6" Margin="0,4">
+                                <TextBlock Text="{Binding FileName}" TextTrimming="CharacterEllipsis" FontWeight="Medium" />
+                                <StackPanel Orientation="Horizontal" Spacing="8">
+                                    <TextBlock Classes="secondary" VerticalAlignment="Center">
+                                        <Run Text="{Binding RecordedText}" /><Run Text=" · " /><Run Text="{Binding DurationText}" />
+                                        <Run Text=" · " /><Run Text="{Binding SpeakerCount}" /><Run Text=" speaker(s)" />
+                                    </TextBlock>
+                                    <Border Classes="badge" Background="{DynamicResource VerdictErrorSoftBrush}" IsVisible="{Binding HasIncidents}">
+                                        <TextBlock Foreground="{DynamicResource VerdictErrorBrush}">
+                                            <Run Text="{Binding IncidentCount}" /><Run Text=" incident(s)" />
+                                        </TextBlock>
+                                    </Border>
+                                </StackPanel>
+                                <TextBlock Text="{Binding StatusText}" Classes="secondary" FontSize="11" IsVisible="{Binding !IsAnalysed}" />
+                                <TextBlock Text="Analysed with other models" Classes="secondary" FontSize="11" IsVisible="{Binding IsOutdated}" />
+                            </StackPanel>
+                        </DataTemplate>
+                    </ListBox.ItemTemplate>
+                </ListBox>
+            </DockPanel>
+        </Border>
+
+        <ScrollViewer x:Name="DetailPane" Grid.Column="2">
+            <StackPanel Spacing="40">
+                <Border Classes="card" IsVisible="{Binding !HasSelection}">
+                    <TextBlock Classes="heading" Text="Select a clip to see who speaks in it." TextWrapping="Wrap" />
+                </Border>
+
+                <Border Classes="card" IsVisible="{Binding HasSelection}">
+                    <StackPanel Spacing="16">
+                        <TextBlock Text="{Binding SelectedClip.FileName}" Classes="heading" TextWrapping="Wrap" />
+                        <SelectableTextBlock Text="{Binding SelectedClip.FilePath}" Classes="secondary" TextWrapping="Wrap" />
+                        <TextBlock Classes="secondary" TextWrapping="Wrap">
+                            <Run Text="{Binding SelectedClip.StatusText}" /><Run Text=" · " /><Run Text="{Binding SelectedClip.DurationText}" />
+                            <Run Text=" · recorded " /><Run Text="{Binding SelectedClip.RecordedText}" />
+                        </TextBlock>
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <Border Classes="badge" Background="{DynamicResource VerdictPossibleSoftBrush}" IsVisible="{Binding SelectedClip.IsOutdated}"
+                                    ToolTip.Tip="The active models differ from the ones this clip was analysed with. Re-analyse it to update.">
+                                <TextBlock Text="Analysed with other models" Foreground="{DynamicResource VerdictPossibleBrush}" />
+                            </Border>
+                            <TextBlock Text="{Binding ModelsText}" Classes="secondary" FontSize="11" TextWrapping="Wrap" VerticalAlignment="Center" />
+                        </StackPanel>
+
+                        <TextBlock Text="Speakers in this clip" Classes="subtitle" Margin="0,8,0,0" />
+                        <ItemsControl ItemsSource="{Binding ClipSpeakers}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate x:DataType="m:AppearanceItem">
+                                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12" Margin="0,6">
+                                        <StackPanel Spacing="4">
+                                            <StackPanel Orientation="Horizontal" Spacing="8">
+                                                <TextBlock Text="{Binding SpeakerName}" FontWeight="SemiBold" VerticalAlignment="Center" />
+                                                <TextBlock Text="{Binding LocalLabel}" Classes="secondary" VerticalAlignment="Center" />
+                                                <Border Classes="badge" Background="{DynamicResource VerdictErrorSoftBrush}" IsVisible="{Binding HasIncidents}">
+                                                    <TextBlock Foreground="{DynamicResource VerdictErrorBrush}">
+                                                        <Run Text="{Binding IncidentCount}" /><Run Text=" incident(s)" />
+                                                    </TextBlock>
+                                                </Border>
+                                            </StackPanel>
+                                            <TextBlock Classes="secondary">
+                                                <Run Text="{Binding TalkTimeText}" /><Run Text=" talk time · " /><Run Text="{Binding UtteranceCount}" />
+                                                <Run Text=" line(s) · " /><Run Text="{Binding MatchText}" />
+                                            </TextBlock>
+                                        </StackPanel>
+                                        <Button Grid.Column="1" Content="Open speaker" VerticalAlignment="Center"
+                                                Command="{Binding $parent[UserControl].((vm:ClipsViewModel)DataContext).OpenSpeakerCommand}"
+                                                CommandParameter="{Binding}" />
+                                    </Grid>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </StackPanel>
+                </Border>
+
+                <Border Classes="card" IsVisible="{Binding HasSelection}">
+                    <StackPanel Spacing="16">
+                        <TextBlock Text="Re-analyse" Classes="heading" />
+                        <TextBlock Classes="secondary" TextWrapping="Wrap"
+                                   Text="Runs the clip again with the active models (see the Models page). Detailed is slower and picks up quieter, shorter and overlapping speech. Leave From and To empty for the whole clip, or enter a section such as 12:30 to 14:00; only lines in that section are replaced." />
+                        <Grid ColumnDefinitions="Auto,*,*,Auto" ColumnSpacing="8">
+                            <ComboBox ItemsSource="{Binding Presets}" SelectedItem="{Binding ReanalysePreset}" MinWidth="130" />
+                            <TextBox Grid.Column="1" Text="{Binding RangeFrom}" PlaceholderText="From (m:ss)" />
+                            <TextBox Grid.Column="2" Text="{Binding RangeTo}" PlaceholderText="To (m:ss)" />
+                            <Button Grid.Column="3" Classes="primary" Content="Re-analyse" Command="{Binding ReanalyseCommand}" />
+                        </Grid>
+                        <StackPanel Orientation="Horizontal" Spacing="12" IsVisible="{Binding IsReanalysing}">
+                            <ProgressBar IsIndeterminate="True" Width="160" VerticalAlignment="Center" />
+                            <Button Content="Cancel" Command="{Binding CancelReanalysisCommand}" />
+                        </StackPanel>
+                        <TextBlock Text="{Binding ReanalysisText}" Classes="secondary" TextWrapping="Wrap" />
+                        <TextBlock Text="{Binding StatusMessage}" TextWrapping="Wrap" Foreground="{DynamicResource VerdictErrorBrush}"
+                                   IsVisible="{Binding StatusMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                    </StackPanel>
+                </Border>
+
+                <Border Classes="card" IsVisible="{Binding HasSelection}">
+                    <StackPanel Spacing="16">
+                        <Grid ColumnDefinitions="*,Auto">
+                            <TextBlock Text="Transcript" Classes="heading" />
+                            <Button Grid.Column="1" Command="{Binding StopCommand}" IsEnabled="{Binding Player.IsPlaying}">
+                                <StackPanel Orientation="Horizontal" Spacing="12">
+                                    <PathIcon Data="{StaticResource IconStop}" />
+                                    <TextBlock Text="Stop" />
+                                </StackPanel>
+                            </Button>
+                        </Grid>
+                        <ItemsControl ItemsSource="{Binding ClipTranscript}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate x:DataType="m:UtteranceItem">
+                                    <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="12" Margin="0,6">
+                                        <Button VerticalAlignment="Top" ToolTip.Tip="Listen to this line"
+                                                Command="{Binding $parent[UserControl].((vm:ClipsViewModel)DataContext).PlayUtteranceCommand}"
+                                                CommandParameter="{Binding}">
+                                            <PathIcon Data="{StaticResource IconPlay}" />
+                                        </Button>
+                                        <Button Grid.Column="2" VerticalAlignment="Top" Content="Check in detail"
+                                                ToolTip.Tip="Re-analyse this line with 5 s either side using the Detailed preset"
+                                                Command="{Binding $parent[UserControl].((vm:ClipsViewModel)DataContext).CheckLineCommand}"
+                                                CommandParameter="{Binding}" />
+                                        <StackPanel Grid.Column="1" Spacing="4">
+                                            <StackPanel Orientation="Horizontal" Spacing="8">
+                                                <TextBlock Text="{Binding StartText}" Classes="secondary" VerticalAlignment="Center" />
+                                                <TextBlock Text="{Binding SpeakerName}" FontWeight="Medium" VerticalAlignment="Center" />
+                                                <Border Classes="badge" Background="{DynamicResource VerdictErrorSoftBrush}" IsVisible="{Binding IsIncident}">
+                                                    <TextBlock Text="{Binding CategoriesText}" Foreground="{DynamicResource VerdictErrorBrush}" />
+                                                </Border>
+                                            </StackPanel>
+                                            <SelectableTextBlock Text="{Binding Transcript}" TextWrapping="Wrap" />
+                                        </StackPanel>
+                                    </Grid>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </StackPanel>
+                </Border>
+
+                <Border Classes="card" IsVisible="{Binding HasSelection}">
+                    <StackPanel Spacing="16">
+                        <TextBlock Text="Analysis history" Classes="heading" />
+                        <ItemsControl ItemsSource="{Binding Runs}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate x:DataType="m:AnalysisRunItem">
+                                    <StackPanel Spacing="2" Margin="0,6">
+                                        <TextBlock FontWeight="Medium">
+                                            <Run Text="{Binding WhenText}" /><Run Text=" · " /><Run Text="{Binding TitleText}" />
+                                        </TextBlock>
+                                        <TextBlock Text="{Binding ResultText}" Classes="secondary" TextWrapping="Wrap" IsVisible="{Binding !Failed}" />
+                                        <TextBlock Text="{Binding ResultText}" TextWrapping="Wrap" IsVisible="{Binding Failed}"
+                                                   Foreground="{DynamicResource VerdictErrorBrush}" />
+                                        <TextBlock Text="{Binding ModelsText}" Classes="secondary" FontSize="11" TextWrapping="Wrap" />
+                                    </StackPanel>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </StackPanel>
+                </Border>
+            </StackPanel>
+        </ScrollViewer>
+    </Grid>
+</UserControl>

@@ -1,5 +1,6 @@
 <Styles xmlns="https://github.com/avaloniaui"
-        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:styles="using:VoiceScan.App.Styles">
 
     <Styles.Resources>
         <ResourceDictionary>
@@ -34,6 +35,10 @@
             <StreamGeometry x:Key="IconClose">M19 6.4L17.6 5 12 10.6 6.4 5 5 6.4 10.6 12 5 17.6 6.4 19 12 13.4 17.6 19 19 17.6 13.4 12z</StreamGeometry>
             <StreamGeometry x:Key="IconSparkle">M12 2l2.2 6.8L21 11l-6.8 2.2L12 20l-2.2-6.8L3 11l6.8-2.2z</StreamGeometry>
             <StreamGeometry x:Key="IconShield">M12 2L4 5v6c0 5 3.4 9.7 8 11 4.6-1.3 8-6 8-11V5l-8-3z</StreamGeometry>
+            <StreamGeometry x:Key="IconAlert">M1 21h22L12 2 1 21zm12-3h-2v-2h2v2zm0-4h-2v-4h2v4z</StreamGeometry>
+            <StreamGeometry x:Key="IconClip">M4 4h16v16H4V4zm2 2v2h2V6H6zm0 5v2h2v-2H6zm0 5v2h2v-2H6zm10-10v2h2V6h-2zm0 5v2h2v-2h-2zm0 5v2h2v-2h-2zM10 8v8l5-4-5-4z</StreamGeometry>
+            <StreamGeometry x:Key="IconPeople">M16 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6zm-8 0a3 3 0 1 0 0-6 3 3 0 0 0 0 6zm0 2c-2.7 0-8 1.3-8 4v3h16v-3c0-2.7-5.3-4-8-4zm8 0c-.3 0-.7 0-1.1.1 1.2.8 2.1 2 2.1 3.9v3h7v-3c0-2.7-5.3-4-8-4z</StreamGeometry>
+            <StreamGeometry x:Key="IconModel">M15 9H9v6h6V9zm-2 4h-2v-2h2v2zm8-2V9h-2V7c0-1.1-.9-2-2-2h-2V3h-2v2h-2V3H9v2H7c-1.1 0-2 .9-2 2v2H3v2h2v2H3v2h2v2c0 1.1.9 2 2 2h2v2h2v-2h2v2h2v-2h2c1.1 0 2-.9 2-2v-2h2v-2h-2v-2h2zm-4 6H7V7h10v10z</StreamGeometry>
 
             <ResourceDictionary.ThemeDictionaries>
                 <ResourceDictionary x:Key="Light">
@@ -57,6 +62,61 @@
                     <SolidColorBrush x:Key="BrandPrimaryBrush" Color="#D2704F" />
                     <SolidColorBrush x:Key="BrandHoverBrush" Color="#DE805F" />
                     <SolidColorBrush x:Key="BrandPressedBrush" Color="#BC5F40" />
+                </ResourceDictionary>
+                <ResourceDictionary x:Key="{x:Static styles:AppThemeVariants.Ocean}">
+                    <SolidColorBrush x:Key="WindowBackgroundBrush" Color="#0F151C" />
+                    <SolidColorBrush x:Key="SidebarBrush" Color="#131A22" />
+                    <SolidColorBrush x:Key="SurfaceRaisedBrush" Color="#18212B" />
+                    <SolidColorBrush x:Key="HairlineBrush" Color="#26323F" />
+                    <SolidColorBrush x:Key="TextPrimaryBrush" Color="#E3EAF0" />
+                    <SolidColorBrush x:Key="TextSecondaryBrush" Color="#85919E" />
+                    <SolidColorBrush x:Key="BrandPrimaryBrush" Color="#3F8DBB" />
+                    <SolidColorBrush x:Key="BrandHoverBrush" Color="#52A0CE" />
+                    <SolidColorBrush x:Key="BrandPressedBrush" Color="#33789F" />
+                </ResourceDictionary>
+                <ResourceDictionary x:Key="{x:Static styles:AppThemeVariants.Forest}">
+                    <SolidColorBrush x:Key="WindowBackgroundBrush" Color="#121611" />
+                    <SolidColorBrush x:Key="SidebarBrush" Color="#161B15" />
+                    <SolidColorBrush x:Key="SurfaceRaisedBrush" Color="#1C221A" />
+                    <SolidColorBrush x:Key="HairlineBrush" Color="#2A3228" />
+                    <SolidColorBrush x:Key="TextPrimaryBrush" Color="#E4EAE1" />
+                    <SolidColorBrush x:Key="TextSecondaryBrush" Color="#8A9486" />
+                    <SolidColorBrush x:Key="BrandPrimaryBrush" Color="#4F9A5F" />
+                    <SolidColorBrush x:Key="BrandHoverBrush" Color="#62AC72" />
+                    <SolidColorBrush x:Key="BrandPressedBrush" Color="#40844F" />
+                </ResourceDictionary>
+                <ResourceDictionary x:Key="{x:Static styles:AppThemeVariants.Violet}">
+                    <SolidColorBrush x:Key="WindowBackgroundBrush" Color="#16131C" />
+                    <SolidColorBrush x:Key="SidebarBrush" Color="#1B1822" />
+                    <SolidColorBrush x:Key="SurfaceRaisedBrush" Color="#211D29" />
+                    <SolidColorBrush x:Key="HairlineBrush" Color="#302B3B" />
+                    <SolidColorBrush x:Key="TextPrimaryBrush" Color="#E8E4F0" />
+                    <SolidColorBrush x:Key="TextSecondaryBrush" Color="#90899E" />
+                    <SolidColorBrush x:Key="BrandPrimaryBrush" Color="#8F6CD0" />
+                    <SolidColorBrush x:Key="BrandHoverBrush" Color="#A180DC" />
+                    <SolidColorBrush x:Key="BrandPressedBrush" Color="#7A58B8" />
+                </ResourceDictionary>
+                <ResourceDictionary x:Key="{x:Static styles:AppThemeVariants.Graphite}">
+                    <SolidColorBrush x:Key="WindowBackgroundBrush" Color="#121212" />
+                    <SolidColorBrush x:Key="SidebarBrush" Color="#171717" />
+                    <SolidColorBrush x:Key="SurfaceRaisedBrush" Color="#1D1D1D" />
+                    <SolidColorBrush x:Key="HairlineBrush" Color="#2C2C2C" />
+                    <SolidColorBrush x:Key="TextPrimaryBrush" Color="#ECECEC" />
+                    <SolidColorBrush x:Key="TextSecondaryBrush" Color="#8C8C8C" />
+                    <SolidColorBrush x:Key="BrandPrimaryBrush" Color="#5F6B7A" />
+                    <SolidColorBrush x:Key="BrandHoverBrush" Color="#707C8B" />
+                    <SolidColorBrush x:Key="BrandPressedBrush" Color="#4F5A68" />
+                </ResourceDictionary>
+                <ResourceDictionary x:Key="{x:Static styles:AppThemeVariants.Mist}">
+                    <SolidColorBrush x:Key="WindowBackgroundBrush" Color="#F1F4F7" />
+                    <SolidColorBrush x:Key="SidebarBrush" Color="#E8EDF2" />
+                    <SolidColorBrush x:Key="SurfaceRaisedBrush" Color="#E1E7ED" />
+                    <SolidColorBrush x:Key="HairlineBrush" Color="#CDD6DF" />
+                    <SolidColorBrush x:Key="TextPrimaryBrush" Color="#1A2027" />
+                    <SolidColorBrush x:Key="TextSecondaryBrush" Color="#5E6A77" />
+                    <SolidColorBrush x:Key="BrandPrimaryBrush" Color="#2F6DB0" />
+                    <SolidColorBrush x:Key="BrandHoverBrush" Color="#3F7DC0" />
+                    <SolidColorBrush x:Key="BrandPressedBrush" Color="#265C99" />
                 </ResourceDictionary>
             </ResourceDictionary.ThemeDictionaries>
         </ResourceDictionary>
@@ -106,6 +166,23 @@
         <Setter Property="BorderThickness" Value="0,1,0,0" />
         <Setter Property="Padding" Value="0,32,0,0" />
     </Style>
+    <Style Selector="Border.card, Border.panel, Border.callout">
+        <Setter Property="RenderTransform">
+            <TranslateTransform />
+        </Setter>
+        <Style.Animations>
+            <Animation Duration="0:0:0.38" Easing="CubicEaseOut" FillMode="Both">
+                <KeyFrame Cue="0%">
+                    <Setter Property="Opacity" Value="0" />
+                    <Setter Property="TranslateTransform.Y" Value="14" />
+                </KeyFrame>
+                <KeyFrame Cue="100%">
+                    <Setter Property="Opacity" Value="1" />
+                    <Setter Property="TranslateTransform.Y" Value="0" />
+                </KeyFrame>
+            </Animation>
+        </Style.Animations>
+    </Style>
     <Style Selector="Border.panel">
         <Setter Property="Background" Value="{DynamicResource SurfaceRaisedBrush}" />
         <Setter Property="CornerRadius" Value="{StaticResource PanelRadius}" />
@@ -137,6 +214,30 @@
         <Setter Property="Background" Value="Transparent" />
         <Setter Property="BorderBrush" Value="{DynamicResource HairlineBrush}" />
         <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="RenderTransform" Value="none" />
+        <Setter Property="Transitions">
+            <Transitions>
+                <TransformOperationsTransition Property="RenderTransform" Duration="0:0:0.16" Easing="CubicEaseOut" />
+            </Transitions>
+        </Setter>
+    </Style>
+    <Style Selector="Button /template/ ContentPresenter">
+        <Setter Property="Transitions">
+            <Transitions>
+                <BrushTransition Property="Background" Duration="0:0:0.18" Easing="CubicEaseOut" />
+                <BrushTransition Property="BorderBrush" Duration="0:0:0.18" Easing="CubicEaseOut" />
+                <DoubleTransition Property="Opacity" Duration="0:0:0.18" />
+            </Transitions>
+        </Setter>
+    </Style>
+    <Style Selector="Button:pointerover">
+        <Setter Property="RenderTransform" Value="scale(1.02)" />
+    </Style>
+    <Style Selector="Button:pressed">
+        <Setter Property="RenderTransform" Value="scale(0.95)" />
+    </Style>
+    <Style Selector="Button:disabled">
+        <Setter Property="RenderTransform" Value="none" />
     </Style>
     <Style Selector="Button:pointerover /template/ ContentPresenter">
         <Setter Property="Background" Value="{DynamicResource SurfaceRaisedBrush}" />
@@ -169,6 +270,21 @@
         <Setter Property="TextElement.Foreground" Value="White" />
     </Style>
 
+    <!-- Theme picker swatches -->
+    <Style Selector="Button.swatch">
+        <Setter Property="Padding" Value="10,8" />
+        <Setter Property="HorizontalAlignment" Value="Stretch" />
+        <Setter Property="HorizontalContentAlignment" Value="Left" />
+        <Setter Property="BorderThickness" Value="0" />
+    </Style>
+    <Style Selector="Border.swatch-chip">
+        <Setter Property="Width" Value="22" />
+        <Setter Property="Height" Value="22" />
+        <Setter Property="CornerRadius" Value="11" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="BorderBrush" Value="{DynamicResource HairlineBrush}" />
+    </Style>
+
     <!-- Icons -->
     <Style Selector="PathIcon">
         <Setter Property="Width" Value="16" />
@@ -185,6 +301,12 @@
         <Setter Property="Padding" Value="16,12" />
         <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
     </Style>
+    <Style Selector="Button.nav:pointerover">
+        <Setter Property="RenderTransform" Value="translateX(3px)" />
+    </Style>
+    <Style Selector="Button.nav:pressed">
+        <Setter Property="RenderTransform" Value="translateX(1px) scale(0.98)" />
+    </Style>
     <Style Selector="Button.nav:pointerover /template/ ContentPresenter">
         <Setter Property="Background" Value="Transparent" />
         <Setter Property="BorderBrush" Value="Transparent" />
@@ -192,17 +314,24 @@
     </Style>
     <Style Selector="Button.nav.active">
         <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
-        <Setter Property="BorderBrush" Value="{DynamicResource BrandPrimaryBrush}" />
-        <Setter Property="BorderThickness" Value="2,0,0,0" />
     </Style>
     <Style Selector="Button.nav.active /template/ ContentPresenter, Button.nav.active:pointerover /template/ ContentPresenter">
-        <Setter Property="BorderBrush" Value="{DynamicResource BrandPrimaryBrush}" />
         <Setter Property="TextElement.Foreground" Value="{DynamicResource TextPrimaryBrush}" />
+    </Style>
+    <Style Selector="Border#NavIndicator">
+        <Setter Property="Background" Value="{DynamicResource BrandPrimaryBrush}" />
+        <Setter Property="Width" Value="2" />
+        <Setter Property="HorizontalAlignment" Value="Left" />
+        <Setter Property="VerticalAlignment" Value="Top" />
+        <Setter Property="IsHitTestVisible" Value="False" />
     </Style>
 
     <!-- Compact window: icon-only sidebar -->
     <Style Selector="Window.compact TextBlock.navlabel">
         <Setter Property="IsVisible" Value="False" />
+    </Style>
+    <Style Selector="Window.compact Button.nav:pointerover">
+        <Setter Property="RenderTransform" Value="scale(1.06)" />
     </Style>
     <Style Selector="Window.compact Button.nav">
         <Setter Property="HorizontalContentAlignment" Value="Center" />
@@ -215,8 +344,31 @@
         <Setter Property="MinHeight" Value="40" />
         <Setter Property="Padding" Value="12,8" />
     </Style>
+    <Style Selector="TextBox /template/ Border#PART_BorderElement, ComboBox /template/ Border#Background">
+        <Setter Property="Transitions">
+            <Transitions>
+                <BrushTransition Property="Background" Duration="0:0:0.18" />
+                <BrushTransition Property="BorderBrush" Duration="0:0:0.18" />
+            </Transitions>
+        </Setter>
+    </Style>
+    <Style Selector="CheckBox /template/ Border#NormalRectangle">
+        <Setter Property="Transitions">
+            <Transitions>
+                <BrushTransition Property="Background" Duration="0:0:0.15" />
+                <BrushTransition Property="BorderBrush" Duration="0:0:0.15" />
+            </Transitions>
+        </Setter>
+    </Style>
     <Style Selector="ListBox">
         <Setter Property="Background" Value="Transparent" />
+    </Style>
+    <Style Selector="ListBoxItem /template/ ContentPresenter">
+        <Setter Property="Transitions">
+            <Transitions>
+                <BrushTransition Property="Background" Duration="0:0:0.15" Easing="CubicEaseOut" />
+            </Transitions>
+        </Setter>
     </Style>
     <Style Selector="ListBoxItem">
         <Setter Property="CornerRadius" Value="{StaticResource ControlRadius}" />

@@ -327,6 +327,9 @@ public class SidecarInferenceTests
 
         public Task<SidecarScanResponse?> ProcessAudioAsync(string filePath, CancellationToken ct = default) =>
             Task.FromResult(_responder(filePath));
+
+        public Task<SidecarScanResponse> AnalyseAsync(string audioFilePath, SidecarAnalysisRequest request, CancellationToken ct = default) =>
+            Task.FromResult(_responder(audioFilePath) ?? throw new HttpRequestException("sidecar not answering"));
     }
 
     private static string CreateDummyWav(int sampleCount = 16000)
@@ -569,6 +572,61 @@ public class SidecarInferenceTests
         finally
         {
             if (File.Exists(fakeAudio)) File.Delete(fakeAudio);
+        }
+    }
+
+    [Fact]
+    public async Task ScanController_RecordsSidecarAnalysisInModerationStore()
+    {
+        string wavPath = CreateDummyWav(48000);
+        string dir = Path.Combine(Path.GetTempPath(), $"test_moderation_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(Path.Combine(dir, "profiles"));
+        try
+        {
+            using var model = new MockEmbeddingModel();
+            var profile = new VoiceScan.Core.VoiceProfile
+            {
+                ProfileName = "Alex",
+                ModelId = model.ModelId,
+                ModelVersion = model.ModelVersion,
+                Centroid = new float[] { 1f, 0f, 0f, 0f }
+            };
+            string profilePath = Path.Combine(dir, "profiles", "alex.json");
+            profile.SaveToFile(profilePath);
+
+            var sidecar = new MockInferenceClient(_ => new SidecarScanResponse
+            {
+                HasSpeech = true,
+                Segments =
+                [
+                    new VoiceScan.Core.DetectedSegment(0.2, 1.0, 0.9, speakerLabel: "SPEAKER_00", transcript: "good game"),
+                    new VoiceScan.Core.DetectedSegment(1.2, 2.8, 0.9, speakerLabel: "SPEAKER_00", transcript: "you are trash",
+                        isOffensive: true, moderationViolations: ["insult"])
+                    {
+                        ModerationScores = new() { ["insult"] = 0.88 }
+                    }
+                ]
+            });
+
+            var scanner = new VoiceScan.Core.PipelineScanner(model, new VoiceScan.Core.WebRtcVad(), sidecarClient: sidecar);
+            using var store = new VoiceScan.Core.Storage.ModerationStore(Path.Combine(dir, "moderation.db"));
+            using var controller = new VoiceScan.App.Core.Services.BackgroundScanController(
+                scanner, moderationStore: store, profilesDirectory: Path.Combine(dir, "profiles"));
+
+            await controller.StartScanAsync([wavPath], profilePath);
+
+            var clip = Assert.Single(await store.GetClipsAsync(0.5));
+            Assert.Equal(VoiceScan.Core.Storage.ClipAnalysisStatus.Analysed, clip.Status);
+            Assert.Equal(2, clip.UtteranceCount);
+            var incident = Assert.Single(await store.GetUtterancesAsync(incidentSensitivity: 0.5));
+            Assert.Equal("you are trash", incident.Transcript);
+            Assert.Equal("Alex", incident.SpeakerName);
+        }
+        finally
+        {
+            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+            if (File.Exists(wavPath)) File.Delete(wavPath);
+            Directory.Delete(dir, recursive: true);
         }
     }
 }

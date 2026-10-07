@@ -1,0 +1,164 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:VoiceScan.App.Core.ViewModels"
+             xmlns:m="using:VoiceScan.App.Core.Models"
+             xmlns:st="using:VoiceScan.Core.Storage"
+             x:Class="VoiceScan.App.Views.IncidentsView"
+             x:DataType="vm:IncidentsViewModel">
+
+    <Grid x:Name="Split" ColumnDefinitions="520,40,*">
+        <Border x:Name="ListPane" Classes="panel">
+            <DockPanel>
+                <StackPanel DockPanel.Dock="Top" Spacing="12" Margin="0,0,0,16">
+                    <TextBlock Text="Incidents" Classes="heading" />
+                    <TextBlock Classes="secondary">
+                        <Run Text="{Binding ShownCount}" /><Run Text=" shown of " /><Run Text="{Binding TotalCount}" />
+                        <Run Text=" · " /><Run Text="{Binding UnreviewedCount}" /><Run Text=" unreviewed" />
+                    </TextBlock>
+                    <TextBox Text="{Binding SearchText}" PlaceholderText="Search transcript, clip, speaker or note" />
+                    <Grid ColumnDefinitions="*,*,*" ColumnSpacing="8">
+                        <ComboBox HorizontalAlignment="Stretch" ItemsSource="{Binding Categories}" SelectedItem="{Binding CategoryFilter}" />
+                        <ComboBox Grid.Column="1" HorizontalAlignment="Stretch" ItemsSource="{Binding Speakers}" SelectedItem="{Binding SpeakerFilter}" />
+                        <ComboBox Grid.Column="2" HorizontalAlignment="Stretch" ItemsSource="{x:Static vm:IncidentsViewModel.StatusFilters}"
+                                  SelectedItem="{Binding StatusFilter}" />
+                    </Grid>
+                    <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="8">
+                        <TextBlock Text="Sort by" Classes="secondary" VerticalAlignment="Center" />
+                        <ComboBox Grid.Column="1" HorizontalAlignment="Stretch" ItemsSource="{x:Static vm:IncidentsViewModel.SortColumns}"
+                                  SelectedItem="{Binding SortColumn}" />
+                        <Button Grid.Column="2" Content="{Binding SortDirectionText}" Command="{Binding ToggleSortDirectionCommand}" />
+                    </Grid>
+                    <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="12"
+                          ToolTip.Tip="A line is listed when any classifier score reaches this value, or it contains a word-list phrase. Lower finds more, with more false alarms.">
+                        <TextBlock Text="Sensitivity" Classes="secondary" VerticalAlignment="Center" />
+                        <Slider Grid.Column="1" Minimum="{x:Static m:ModerationSettings.MinSensitivity}"
+                                Maximum="{x:Static m:ModerationSettings.MaxSensitivity}"
+                                TickFrequency="0.05" IsSnapToTickEnabled="True" Value="{Binding Settings.Sensitivity}" />
+                        <TextBlock Grid.Column="2" Text="{Binding Settings.Sensitivity, StringFormat={}{0:0.00}}" VerticalAlignment="Center" Width="36" />
+                    </Grid>
+                </StackPanel>
+
+                <Border DockPanel.Dock="Top" Classes="callout" IsVisible="{Binding IsEmpty}">
+                    <TextBlock TextWrapping="Wrap"
+                               Text="No incidents yet. Scan recordings with the analysis sidecar running; its transcripts and offence scores appear here, along with lines matching your word list." />
+                </Border>
+
+                <ListBox ItemsSource="{Binding Incidents}" SelectedItem="{Binding SelectedIncident}">
+                    <ListBox.ItemTemplate>
+                        <DataTemplate x:DataType="m:UtteranceItem">
+                            <StackPanel Spacing="6" Margin="0,4">
+                                <StackPanel Orientation="Horizontal" Spacing="8">
+                                    <Border Classes="badge" Background="{DynamicResource VerdictErrorSoftBrush}">
+                                        <StackPanel Orientation="Horizontal" Spacing="4">
+                                            <PathIcon Data="{StaticResource IconShield}" Width="10" Height="10" Foreground="{DynamicResource VerdictErrorBrush}" />
+                                            <TextBlock Text="{Binding CategoriesText}" Foreground="{DynamicResource VerdictErrorBrush}" />
+                                        </StackPanel>
+                                    </Border>
+                                    <TextBlock Text="{Binding ScoreText}" FontWeight="SemiBold" VerticalAlignment="Center" />
+                                    <TextBlock Text="{Binding Source}" Classes="secondary" VerticalAlignment="Center" />
+                                    <Border Classes="badge" Background="{DynamicResource SurfaceRaisedBrush}" BorderBrush="{DynamicResource HairlineBrush}" BorderThickness="1">
+                                        <TextBlock Text="{Binding StatusText}" Foreground="{DynamicResource TextSecondaryBrush}" />
+                                    </Border>
+                                </StackPanel>
+                                <TextBlock Classes="secondary" TextTrimming="CharacterEllipsis">
+                                    <Run Text="{Binding SpeakerName}" FontWeight="Medium" /><Run Text=" · " /><Run Text="{Binding ClipName}" />
+                                    <Run Text=" · " /><Run Text="{Binding StartText}" />
+                                </TextBlock>
+                                <TextBlock Text="{Binding Transcript}" TextWrapping="Wrap" MaxLines="2" TextTrimming="CharacterEllipsis" />
+                            </StackPanel>
+                        </DataTemplate>
+                    </ListBox.ItemTemplate>
+                </ListBox>
+            </DockPanel>
+        </Border>
+
+        <ScrollViewer x:Name="DetailPane" Grid.Column="2">
+            <StackPanel Spacing="40">
+                <Border Classes="card">
+                    <StackPanel Spacing="20">
+                        <TextBlock Classes="heading" Text="Select an incident to review it." IsVisible="{Binding !HasSelection}" />
+                        <StackPanel Spacing="20" IsVisible="{Binding HasSelection}">
+                            <SelectableTextBlock Text="{Binding SelectedIncident.Transcript}" TextWrapping="Wrap" Classes="subtitle" FontSize="18" />
+                            <TextBlock Classes="secondary" TextWrapping="Wrap">
+                                <Run Text="{Binding SelectedIncident.ClipName}" /><Run Text=" · " /><Run Text="{Binding SelectedIncident.RangeText}" />
+                                <Run Text=" · recorded " /><Run Text="{Binding SelectedIncident.RecordedText}" />
+                            </TextBlock>
+                            <StackPanel Orientation="Horizontal" Spacing="12">
+                                <TextBlock Text="Speaker" Classes="secondary" VerticalAlignment="Center" />
+                                <TextBlock Text="{Binding SelectedIncident.SpeakerName}" FontWeight="SemiBold" VerticalAlignment="Center" />
+                                <Button Content="Open speaker" Command="{Binding OpenSpeakerCommand}" />
+                            </StackPanel>
+                            <StackPanel Spacing="4">
+                                <TextBlock Text="Classifier scores" Classes="secondary" FontSize="11" />
+                                <TextBlock Text="{Binding SelectedIncident.ScoresText, TargetNullValue='None'}" TextWrapping="Wrap" />
+                            </StackPanel>
+                            <StackPanel Spacing="4" IsVisible="{Binding SelectedIncident.WordHitsText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+                                <TextBlock Text="Word list matches" Classes="secondary" FontSize="11" />
+                                <TextBlock Text="{Binding SelectedIncident.WordHitsText}" TextWrapping="Wrap" />
+                            </StackPanel>
+
+                            <StackPanel Orientation="Horizontal" Spacing="12">
+                                <Button Command="{Binding PlayCommand}" ToolTip.Tip="Plays this line with one second either side. Needs ffplay (part of ffmpeg) on PATH.">
+                                    <StackPanel Orientation="Horizontal" Spacing="12">
+                                        <PathIcon Data="{StaticResource IconPlay}" />
+                                        <TextBlock Text="Listen" />
+                                    </StackPanel>
+                                </Button>
+                                <Button Command="{Binding StopCommand}" IsEnabled="{Binding Player.IsPlaying}">
+                                    <StackPanel Orientation="Horizontal" Spacing="12">
+                                        <PathIcon Data="{StaticResource IconStop}" />
+                                        <TextBlock Text="Stop" />
+                                    </StackPanel>
+                                </Button>
+                            </StackPanel>
+
+                            <TextBox Text="{Binding ReviewNote}" PlaceholderText="Note (optional), saved with your decision" AcceptsReturn="True" MinHeight="60" TextWrapping="Wrap" />
+                            <StackPanel Orientation="Horizontal" Spacing="12">
+                                <Button Classes="primary" Command="{Binding ConfirmCommand}">
+                                    <StackPanel Orientation="Horizontal" Spacing="12">
+                                        <PathIcon Data="{StaticResource IconCheck}" />
+                                        <TextBlock Text="Confirm offence" />
+                                    </StackPanel>
+                                </Button>
+                                <Button Command="{Binding DismissCommand}">
+                                    <StackPanel Orientation="Horizontal" Spacing="12">
+                                        <PathIcon Data="{StaticResource IconClose}" />
+                                        <TextBlock Text="Dismiss" />
+                                    </StackPanel>
+                                </Button>
+                                <Button Content="Mark unreviewed" Command="{Binding ResetCommand}" />
+                            </StackPanel>
+                        </StackPanel>
+                        <TextBlock Text="{Binding StatusMessage}" Classes="secondary" TextWrapping="Wrap" />
+                    </StackPanel>
+                </Border>
+
+                <Border Classes="card">
+                    <StackPanel Spacing="16">
+                        <TextBlock Text="Word list" Classes="heading" />
+                        <TextBlock Classes="secondary" TextWrapping="Wrap"
+                                   Text="Lines containing these words or phrases are always listed, whatever the sensitivity. Matching ignores case and punctuation; end a phrase with * to match any ending (idiot* matches idiots). Changes apply to every scanned clip immediately." />
+                        <Grid ColumnDefinitions="*,180,Auto" ColumnSpacing="8">
+                            <TextBox Text="{Binding NewPhrase}" PlaceholderText="Word or phrase" />
+                            <TextBox Grid.Column="1" Text="{Binding NewCategory}" PlaceholderText="Category (optional)" />
+                            <Button Grid.Column="2" Classes="primary" Content="Add" Command="{Binding AddWordCommand}" />
+                        </Grid>
+                        <ItemsControl ItemsSource="{Binding WordList}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate x:DataType="st:WordListEntry">
+                                    <Grid ColumnDefinitions="*,180,Auto" ColumnSpacing="8" Margin="0,4">
+                                        <TextBlock Text="{Binding Phrase}" VerticalAlignment="Center" FontWeight="Medium" />
+                                        <TextBlock Grid.Column="1" Text="{Binding Category}" Classes="secondary" VerticalAlignment="Center" />
+                                        <Button Grid.Column="2" Content="Remove"
+                                                Command="{Binding $parent[UserControl].((vm:IncidentsViewModel)DataContext).RemoveWordCommand}"
+                                                CommandParameter="{Binding}" />
+                                    </Grid>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </StackPanel>
+                </Border>
+            </StackPanel>
+        </ScrollViewer>
+    </Grid>
+</UserControl>

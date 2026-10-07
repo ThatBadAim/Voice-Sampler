@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using VoiceScan.App.Core.Models;
 using VoiceScan.App.Core.Services;
 using VoiceScan.Core;
 using System.Runtime.CompilerServices;
@@ -10,13 +11,18 @@ public enum AppNavigationPage
     Enrollment,
     Scan,
     Results,
-    Review
+    Review,
+    Incidents,
+    Clips,
+    Speakers,
+    Models
 }
 
 public sealed class MainAppViewModel : INotifyPropertyChanged
 {
     private AppNavigationPage _currentPage;
-    private bool _isDarkTheme = true;
+    private AppTheme _theme;
+    private readonly UserSettingsStore? _settings;
     private bool _isMicaBackdropEnabled = true;
     private string? _gpuStatusMessage;
     private string _windowTitle = "VoiceScan";
@@ -27,6 +33,10 @@ public sealed class MainAppViewModel : INotifyPropertyChanged
     public ScanDashboardViewModel Scan { get; }
     public ResultsViewModel Results { get; }
     public ReviewViewModel Review { get; }
+    public IncidentsViewModel Incidents { get; }
+    public ClipsViewModel Clips { get; }
+    public SpeakersViewModel Speakers { get; }
+    public ModelsViewModel Models { get; }
 
     public AppNavigationPage CurrentPage
     {
@@ -34,11 +44,18 @@ public sealed class MainAppViewModel : INotifyPropertyChanged
         set => SetField(ref _currentPage, value);
     }
 
-    public bool IsDarkTheme
+    public IReadOnlyList<AppTheme> Themes => AppTheme.All;
+
+    public AppTheme Theme
     {
-        get => _isDarkTheme;
-        set => SetField(ref _isDarkTheme, value);
+        get => _theme;
+        private set
+        {
+            if (SetField(ref _theme, value)) OnPropertyChanged(nameof(IsDarkTheme));
+        }
     }
+
+    public bool IsDarkTheme => _theme.IsDark;
 
     public bool IsMicaBackdropEnabled
     {
@@ -63,12 +80,26 @@ public sealed class MainAppViewModel : INotifyPropertyChanged
         EnrollmentWizardViewModel enrollment,
         ScanDashboardViewModel scan,
         ResultsViewModel results,
-        ReviewViewModel review)
+        ReviewViewModel review,
+        IncidentsViewModel incidents,
+        ClipsViewModel clips,
+        SpeakersViewModel speakers,
+        ModelsViewModel models,
+        UserSettingsStore? settings = null)
     {
+        _settings = settings;
+        _theme = AppTheme.Find(settings?.Current.ThemeId);
         Enrollment = enrollment;
         Scan = scan;
         Results = results;
         Review = review;
+        Incidents = incidents;
+        Clips = clips;
+        Speakers = speakers;
+        Models = models;
+
+        Incidents.SpeakerRequested += OpenSpeaker;
+        Clips.SpeakerRequested += OpenSpeaker;
 
         // First run: no saved profile yet, so start with enrollment.
         _currentPage = Scan.HasProfiles ? AppNavigationPage.Scan : AppNavigationPage.Enrollment;
@@ -87,6 +118,7 @@ public sealed class MainAppViewModel : INotifyPropertyChanged
         Scan.ScanFinished += () =>
         {
             if (Scan.CompletedFiles.Count > 0) NavigateTo(AppNavigationPage.Results);
+            RefreshModerationPages();
         };
 
         // Auto-transfer completed scan results to Results and Review views
@@ -98,13 +130,11 @@ public sealed class MainAppViewModel : INotifyPropertyChanged
                 {
                     Results.AddResult(item);
 
-                    // Add segments needing review (Possible, Match with reason flags, or Moderated/Offensive) to Review queue
+                    // Review verifies the target voice (confirming adds the segment to the profile), so offensive lines
+                    // from other speakers belong on the Incidents page, not here.
                     var reviewCandidates = item.Segments.Where(seg =>
                         seg.Verdict.Equals("Possible", StringComparison.OrdinalIgnoreCase) ||
-                        seg.ReasonFlags.Count > 0 ||
-                        seg.IsOffensive ||
-                        seg.IsFlagged ||
-                        (seg.ModerationViolations != null && seg.ModerationViolations.Count > 0));
+                        seg.ReasonFlags.Any(f => f != "OFFENSIVE_CONTENT"));
 
                     Review.EnqueueSegments(reviewCandidates, item.ProfileName ?? "Unknown profile", item.FileName, item.ProfilePath);
                 }
@@ -115,11 +145,51 @@ public sealed class MainAppViewModel : INotifyPropertyChanged
     public void NavigateTo(AppNavigationPage page)
     {
         CurrentPage = page;
+        // The moderation pages read the database, which scans update in the background.
+        switch (page)
+        {
+            case AppNavigationPage.Incidents: Incidents.RefreshCommand.Execute(null); break;
+            case AppNavigationPage.Clips: Clips.RefreshCommand.Execute(null); break;
+            case AppNavigationPage.Speakers: Speakers.RefreshCommand.Execute(null); break;
+            case AppNavigationPage.Models: Models.RefreshCommand.Execute(null); break;
+        }
     }
 
-    public void ToggleTheme()
+    private async void OpenSpeaker(long speakerId)
     {
-        IsDarkTheme = !IsDarkTheme;
+        CurrentPage = AppNavigationPage.Speakers;
+        try
+        {
+            await Speakers.ShowSpeakerAsync(speakerId);
+        }
+        catch (Exception ex)
+        {
+            VoiceScan.Core.Logging.VoiceScanLogger.Error(nameof(MainAppViewModel), $"Could not open speaker {speakerId}", ex);
+        }
+    }
+
+    /// <summary>After the voice model is switched: profile compatibility, default thresholds and the moderation pages change.</summary>
+    public void OnEmbeddingModelChanged(string? gpuStatusMessage)
+    {
+        GpuStatusMessage = gpuStatusMessage;
+        Scan.RefreshProfiles();
+        Scan.OnEmbeddingModelChanged();
+        RefreshModerationPages();
+    }
+
+    private void RefreshModerationPages()
+    {
+        Incidents.RefreshCommand.Execute(null);
+        Clips.RefreshCommand.Execute(null);
+        Speakers.RefreshCommand.Execute(null);
+    }
+
+    public void SelectTheme(string themeId)
+    {
+        Theme = AppTheme.Find(themeId);
+        if (_settings is null) return;
+        _settings.Current.ThemeId = Theme.Id;
+        _settings.Save();
     }
 
     private bool SetField<T>(ref T field, T value, [CallerMemberName] string? propertyName = null)

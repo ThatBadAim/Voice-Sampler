@@ -202,10 +202,31 @@ public sealed class ScanDashboardViewModel : INotifyPropertyChanged
             else uiContext.Post(_ => action(), null);
         }
 
-        _scanController.ProgressChanged += (s, e) => OnUi(() =>
+        // Workers report progress far faster than the display refreshes. Only the newest value matters, so keep at
+        // most one UI callback queued instead of flooding the dispatcher and delaying frames.
+        var progressGate = new object();
+        OverallScanProgress latestProgress = default;
+        bool progressQueued = false;
+        _scanController.ProgressChanged += (s, e) =>
         {
-            Progress = e;
-        });
+            lock (progressGate)
+            {
+                latestProgress = e;
+                if (progressQueued) return;
+                progressQueued = true;
+            }
+
+            OnUi(() =>
+            {
+                OverallScanProgress next;
+                lock (progressGate)
+                {
+                    next = latestProgress;
+                    progressQueued = false;
+                }
+                Progress = next;
+            });
+        };
 
         _scanController.FileCompleted += (s, file) => OnUi(() =>
         {
@@ -248,6 +269,9 @@ public sealed class ScanDashboardViewModel : INotifyPropertyChanged
     }
 
     /// <summary>Reloads saved profiles; keeps the current choice, or selects <paramref name="selectPath"/> when given.</summary>
+    /// <summary>The default cluster threshold comes from the active embedding model.</summary>
+    public void OnEmbeddingModelChanged() => OnPropertyChanged(nameof(ClusterThreshold));
+
     public void RefreshProfiles(string? selectPath = null)
     {
         selectPath ??= _selectedProfilePath;

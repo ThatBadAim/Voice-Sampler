@@ -283,14 +283,16 @@ public static class AudioDecoder
     /// A decode that FFmpeg reports as failed surfaces as an <see cref="InvalidDataException"/> after the
     /// chunks it did produce, so a truncated decode is never mistaken for the whole file.
     /// </summary>
-    /// <param name="maxDurationSeconds">Decode at most this much audio from the start of the file.</param>
+    /// <param name="maxDurationSeconds">Decode at most this much audio from the start of the file (or from <paramref name="startSeconds"/>).</param>
+    /// <param name="startSeconds">Skip this much audio first; chunk offsets and times are then relative to it.</param>
     public static async IAsyncEnumerable<DecodedAudioChunk> StreamDecodeAsync(
         string mediaFilePath,
         int audioTrackIndex = 0,
         int sampleRate = DefaultSampleRate,
         int chunkSize = DefaultChunkSize,
         [EnumeratorCancellation] CancellationToken cancellationToken = default,
-        double? maxDurationSeconds = null)
+        double? maxDurationSeconds = null,
+        double startSeconds = 0.0)
     {
         if (!File.Exists(mediaFilePath))
         {
@@ -306,7 +308,13 @@ public static class AudioDecoder
         });
 
         var inv = CultureInfo.InvariantCulture;
-        var args = new List<string> { "-v", "error", "-i", mediaFilePath, "-map", MapArgument(audioTrackIndex) };
+        var args = new List<string> { "-v", "error" };
+        if (startSeconds > 0)
+        {
+            args.Add("-ss");
+            args.Add(startSeconds.ToString("F3", inv));
+        }
+        args.AddRange(["-i", mediaFilePath, "-map", MapArgument(audioTrackIndex)]);
         if (maxDurationSeconds is > 0)
         {
             args.Add("-t");
@@ -329,6 +337,10 @@ public static class AudioDecoder
 
         if (useWavFallback)
         {
+            if (startSeconds > 0)
+            {
+                throw new NotSupportedException("Decoding from an offset needs FFmpeg, which was not found.");
+            }
             await foreach (var chunk in StreamDecodeWavNativeAsync(mediaFilePath, sampleRate, chunkSize, cancellationToken, maxDurationSeconds))
             {
                 yield return chunk;

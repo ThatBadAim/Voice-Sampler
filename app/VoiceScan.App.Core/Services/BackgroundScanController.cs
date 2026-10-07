@@ -2,6 +2,7 @@ using System.Diagnostics;
 using VoiceScan.App.Core.Models;
 using VoiceScan.Core;
 using VoiceScan.Core.Logging;
+using VoiceScan.Core.Storage;
 
 namespace VoiceScan.App.Core.Services;
 
@@ -50,6 +51,8 @@ public sealed class BackgroundScanController : IBackgroundScanController
 {
     private readonly PipelineScanner _scanner;
     private readonly IWaveformService _waveformService;
+    private readonly ModerationStore? _moderationStore;
+    private readonly string? _profilesDirectory;
     private readonly ManualResetEventSlim _pauseEvent = new(true);
     private CancellationTokenSource? _scanCts;
     private ScanExecutionState _state = ScanExecutionState.Idle;
@@ -67,10 +70,18 @@ public sealed class BackgroundScanController : IBackgroundScanController
     public ModelOperatingPoint OperatingPoint => _scanner.EmbeddingModel.OperatingPoint;
     public string ModelId => _scanner.EmbeddingModel.ModelId;
 
-    public BackgroundScanController(PipelineScanner scanner, IWaveformService? waveformService = null)
+    /// <param name="moderationStore">Receives every scanned file for the Incidents, Clips and Speakers pages.</param>
+    /// <param name="profilesDirectory">Enrolled voices used to name linked speakers; defaults to the user's profiles.</param>
+    public BackgroundScanController(
+        PipelineScanner scanner,
+        IWaveformService? waveformService = null,
+        ModerationStore? moderationStore = null,
+        string? profilesDirectory = null)
     {
         _scanner = scanner;
         _waveformService = waveformService ?? new WaveformService();
+        _moderationStore = moderationStore;
+        _profilesDirectory = profilesDirectory;
         _currentProgress = CreateInitialProgress(0);
     }
 
@@ -107,6 +118,12 @@ public sealed class BackgroundScanController : IBackgroundScanController
         _scanner.EnsureCompatible(targetProfile);
         double threshold = opt.Threshold ?? OperatingPoint.Threshold;
         double clusterThreshold = opt.ClusterThreshold ?? OperatingPoint.ClusterDistanceThreshold;
+
+        // The model must not be switched mid-run: cache keys, profiles and stored vectors all name its version.
+        using var modelUse = _scanner.EmbeddingModel is SwappableEmbeddingModel swappable ? swappable.BeginUse() : null;
+        IReadOnlyList<KnownVoice> knownVoices = _moderationStore != null
+            ? ProfileLibrary.LoadKnownVoices(_scanner.EmbeddingModel.ModelVersion, _profilesDirectory)
+            : [];
 
         _scanCts?.Dispose();
         _scanCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -201,6 +218,7 @@ public sealed class BackgroundScanController : IBackgroundScanController
                     string fileName = Path.GetFileName(filePath);
 
                     WaveformEnvelope? waveform = await BuildWaveformAsync(filePath, scanResult, ct);
+                    await IngestModerationAsync(scanResult, knownVoices, ct);
 
                     List<HitSegmentResult> hits = [];
                     for (int s = 0; s < scanResult.Segments.Count; s++)
@@ -296,6 +314,21 @@ public sealed class BackgroundScanController : IBackgroundScanController
             // A missing preview must not fail the whole scan; the verdict for this file is already known.
             VoiceScanLogger.Warn("BackgroundScanController", $"Could not build waveform for {filePath}: {ex.Message}");
             return null;
+        }
+    }
+
+    private async Task IngestModerationAsync(FileScanResult scanResult, IReadOnlyList<KnownVoice> knownVoices, CancellationToken ct)
+    {
+        if (_moderationStore == null) return;
+        try
+        {
+            await _moderationStore.IngestAsync(
+                scanResult, new AnalysisRunInfo(_scanner.EmbeddingModel.ModelVersion), knownVoices, OperatingPoint.Threshold, ct: ct);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // The scan verdict for this file stands; only the moderation pages miss it.
+            VoiceScanLogger.Error("BackgroundScanController", $"Could not record moderation data for {scanResult.FilePath}", ex);
         }
     }
 

@@ -5,6 +5,7 @@ using Avalonia.Input.Platform;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Threading;
+using VoiceScan.App.Core.Services;
 using VoiceScan.Core;
 using VoiceScan.Core.Logging;
 
@@ -42,6 +43,20 @@ public static class CrashHandler
         };
     }
 
+    /// <summary>
+    /// For failures where Avalonia may not be running (setup, XAML load, platform init): log and show a native dialog.
+    /// </summary>
+    public static void ReportFatalWithoutUi(Exception ex, string headline)
+    {
+        try { VoiceScanLogger.Fatal("CrashHandler", headline, ex); }
+        catch { /* logging must never mask the original error */ }
+
+        var explanation = ErrorExplainer.Explain(ex);
+        NativeErrorDialog.Show("VoiceScan — Error",
+            $"{headline}\n\n{explanation.Cause}\n\nWhat you can do: {explanation.Remedy}\n\n" +
+            $"Technical details: {LogPath}\n\n{ErrorExplainer.Unwrap(ex).GetType().Name}: {ErrorExplainer.Unwrap(ex).Message}");
+    }
+
     /// <summary>Logs the exception and shows the dialog. Safe to call from any thread.</summary>
     public static void Report(Exception ex, string headline, bool fatal, bool wait = false)
     {
@@ -52,23 +67,38 @@ public static class CrashHandler
         {
             if (Dispatcher.UIThread.CheckAccess())
             {
-                if (wait) return; // blocking the UI thread would freeze the dialog itself
-                ShowDialog(ex, headline, fatal, null);
+                if (wait)
+                {
+                    // Blocking the UI thread would freeze the dialog itself, and the process may be about to die.
+                    ReportFatalWithoutUi(ex, headline);
+                    return;
+                }
+                ShowDialog(ex, headline, fatal, null, null);
                 return;
             }
 
+            using var shown = new ManualResetEventSlim();
             using var done = new ManualResetEventSlim();
-            Dispatcher.UIThread.Post(() => ShowDialog(ex, headline, fatal, done));
+            Dispatcher.UIThread.Post(() => ShowDialog(ex, headline, fatal, shown, done));
+
+            // If the UI thread is dead or shutting down the dialog never appears; never fail silently.
+            if (!shown.Wait(TimeSpan.FromSeconds(5)))
+            {
+                ReportFatalWithoutUi(ex, headline);
+                return;
+            }
             if (wait) done.Wait();
         }
         catch (Exception dialogEx)
         {
             Console.Error.WriteLine($"{headline}\n{ex}\n(Error dialog failed: {dialogEx.Message})");
+            ReportFatalWithoutUi(ex, headline);
         }
     }
 
     public static Window CreateErrorWindow(Exception ex, string headline, bool canContinue, Action? onClose = null)
     {
+        var explanation = ErrorExplainer.Explain(ex);
         var details = $"{ex.GetType().Name}: {ex.Message}\n\n{ex}";
 
         var detailBox = new TextBox
@@ -87,8 +117,8 @@ public static class CrashHandler
         var window = new Window
         {
             Title = "VoiceScan — Error",
-            Width = 640,
-            Height = 440,
+            Width = 680,
+            Height = 520,
             WindowStartupLocation = WindowStartupLocation.CenterScreen,
             Content = new DockPanel
             {
@@ -109,12 +139,14 @@ public static class CrashHandler
 
         var header = new StackPanel
         {
-            Spacing = 4,
+            Spacing = 8,
             Margin = new Thickness(0, 0, 0, 12),
             Children =
             {
-                new TextBlock { Text = headline, FontWeight = FontWeight.SemiBold, TextWrapping = TextWrapping.Wrap },
-                new TextBlock { Text = $"Details were written to {LogPath}", Opacity = 0.7, TextWrapping = TextWrapping.Wrap },
+                new TextBlock { Text = headline, FontWeight = FontWeight.SemiBold, FontSize = 16, TextWrapping = TextWrapping.Wrap },
+                new TextBlock { Text = explanation.Cause, TextWrapping = TextWrapping.Wrap },
+                new TextBlock { Text = "What you can do: " + explanation.Remedy, TextWrapping = TextWrapping.Wrap },
+                new TextBlock { Text = $"Technical details were written to {LogPath}", Opacity = 0.7, TextWrapping = TextWrapping.Wrap },
             },
         };
         DockPanel.SetDock(header, Dock.Top);
@@ -144,11 +176,12 @@ public static class CrashHandler
         return window;
     }
 
-    private static void ShowDialog(Exception ex, string headline, bool fatal, ManualResetEventSlim? done)
+    private static void ShowDialog(Exception ex, string headline, bool fatal, ManualResetEventSlim? shown, ManualResetEventSlim? done)
     {
-        // Avoid a dialog storm when one fault raises many exceptions.
+        // Avoid a dialog storm when one fault raises many exceptions; the first dialog already informs the user.
         if (Interlocked.Exchange(ref _dialogOpen, 1) == 1)
         {
+            shown?.Set();
             done?.Set();
             return;
         }
@@ -165,6 +198,7 @@ public static class CrashHandler
             var owner = (Application.Current?.ApplicationLifetime as IClassicDesktopStyleApplicationLifetime)?.MainWindow;
             if (owner is { IsVisible: true }) window.ShowDialog(owner).ContinueWith(_ => { }, TaskScheduler.Default);
             else window.Show();
+            shown?.Set();
         }
         catch
         {

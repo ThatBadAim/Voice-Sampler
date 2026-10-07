@@ -6,6 +6,8 @@ using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -27,6 +29,9 @@ public sealed class PipelineScanner
 
     private const int GpuBatchSize = 64;
     private const int CpuBatchSize = 16;
+
+    /// <summary>Share of a file's progress given to decode and embedding while the sidecar answer is still pending.</summary>
+    private const double LocalWorkProgressShare = 0.95;
 
     private readonly ISpeakerEmbeddingModel _embeddingModel;
     private readonly WebRtcVad _vad;
@@ -117,45 +122,55 @@ public sealed class PipelineScanner
 
         var activeSidecar = sidecarClient ?? _sidecarClient;
 
-        // 1. Check SQLite Embedding Cache
-        if (_database != null)
+        // The sidecar analyses the file while this method decodes, runs VAD and embeds; its answer is awaited where it
+        // is needed. RunSidecarAsync never throws: a failed or cancelled analysis gives null.
+        using var sidecarCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        Task<SidecarScanResponse?> sidecarTask = activeSidecar != null
+            ? RunSidecarAsync(activeSidecar, mediaFilePath, fileHash, audioTrackIndex, sidecarCts.Token)
+            : Task.FromResult<SidecarScanResponse?>(null);
+        try
         {
-            cacheKey = VoiceScanDatabase.ComputeCacheKey(fileHash, _embeddingModel.ModelVersion, vadSettings, windowSettings);
-
-            var cachedScan = await _database.GetCachedScanAsync(cacheKey, cancellationToken);
-            if (cachedScan != null)
+            return await ScanWithSidecarAsync();
+        }
+        finally
+        {
+            if (!sidecarTask.IsCompleted)
             {
-                var cachedWindows = cachedScan.Windows;
-                var cachedInfo = cachedScan.Info;
-                // CACHE HIT: Instant re-scan bypassing decode, VAD, and neural inference
-                var cachedWindowItems = new List<WindowItem>(cachedWindows.Count);
-                for (int i = 0; i < cachedWindows.Count; i++)
-                {
-                    var cw = cachedWindows[i];
-                    cachedWindowItems.Add(new WindowItem(i, cw.StartTimeSeconds, cw.EndTimeSeconds, cw.Embedding, cw.SnrDb));
-                }
+                sidecarCts.Cancel();
+                await sidecarTask;
+            }
+        }
 
-                double duration = cachedInfo.DurationSeconds > 0.0
-                    ? cachedInfo.DurationSeconds
-                    : await AudioDecoder.GetMediaDurationSecondsAsync(mediaFilePath, cancellationToken);
-                if (duration <= 0.0 && cachedWindows.Count > 0)
-                {
-                    duration = cachedWindows[^1].EndTimeSeconds;
-                }
+        async Task<FileScanResult> ScanWithSidecarAsync()
+        {
+            // 1. Check SQLite Embedding Cache
+            if (_database != null)
+            {
+                cacheKey = VoiceScanDatabase.ComputeCacheKey(fileHash, _embeddingModel.ModelVersion, vadSettings, windowSettings);
 
-                SidecarScanResponse? cachedSidecarResponse = null;
-                if (activeSidecar != null)
+                var cachedScan = await _database.GetCachedScanAsync(cacheKey, cancellationToken);
+                if (cachedScan != null)
                 {
+                    var cachedWindows = cachedScan.Windows;
+                    var cachedInfo = cachedScan.Info;
+                    // CACHE HIT: Instant re-scan bypassing decode, VAD, and neural inference
+                    var cachedWindowItems = new List<WindowItem>(cachedWindows.Count);
+                    for (int i = 0; i < cachedWindows.Count; i++)
+                    {
+                        var cw = cachedWindows[i];
+                        cachedWindowItems.Add(new WindowItem(i, cw.StartTimeSeconds, cw.EndTimeSeconds, cw.Embedding, cw.SnrDb));
+                    }
+
+                    double duration = cachedInfo.DurationSeconds > 0.0
+                        ? cachedInfo.DurationSeconds
+                        : await AudioDecoder.GetMediaDurationSecondsAsync(mediaFilePath, cancellationToken);
+                    if (duration <= 0.0 && cachedWindows.Count > 0)
+                    {
+                        duration = cachedWindows[^1].EndTimeSeconds;
+                    }
+
+                    SidecarScanResponse? cachedSidecarResponse = await sidecarTask;
                     cancellationToken.ThrowIfCancellationRequested();
-                    try
-                    {
-                        cachedSidecarResponse = await activeSidecar.ScanAudioAsync(mediaFilePath, cancellationToken);
-                    }
-                    catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
-                    {
-                        Logging.VoiceScanLogger.Warn("PipelineScanner", $"Sidecar scan on cache hit failed: {ex.Message}");
-                        cachedSidecarResponse = null;
-                    }
                     if (cachedSidecarResponse != null && !cachedSidecarResponse.HasSpeech)
                     {
                         var noSpeechResult = new FileScanResult
@@ -168,7 +183,9 @@ public sealed class PipelineScanner
                             Verdict = "No match",
                             MaxConfidence = 0.0,
                             Segments = new List<DetectedSegment>(),
-                            ReasonFlags = new List<string> { "NO_SPEECH_DETECTED" }
+                            ReasonFlags = new List<string> { "NO_SPEECH_DETECTED" },
+                            AnalyzerUsed = true,
+                            AnalyzerModels = cachedSidecarResponse.Models
                         };
 
                         if (!string.IsNullOrEmpty(fileHash))
@@ -188,108 +205,205 @@ public sealed class PipelineScanner
                         reportProgress?.Invoke(1.0);
                         return noSpeechResult;
                     }
+
+                    List<DetectedSegment> cachedSegments;
+                    double cachedMaxConf;
+                    string cachedVerdict;
+
+                    if (cachedSidecarResponse != null && cachedSidecarResponse.HasSpeech)
+                    {
+                        cachedSegments = MapAndScoreSidecarSegments(
+                            cachedSidecarResponse.Segments,
+                            cachedWindowItems,
+                            targetProfile,
+                            threshold,
+                            normalizer);
+                        cachedMaxConf = cachedSegments.Count > 0 ? cachedSegments.Max(s => s.Confidence) : 0.0;
+                        cachedVerdict = ComputeOverallVerdict(cachedSegments);
+                    }
+                    else
+                    {
+                        (cachedSegments, cachedMaxConf, cachedVerdict) = ScoreAndAggregate(
+                            cachedWindowItems,
+                            targetProfile,
+                            threshold,
+                            clusterDistance,
+                            mergeToleranceSec,
+                            enableClustering,
+                            enableTemporalSmoothing,
+                            peakDelta,
+                            neighborToleranceSec,
+                            normalizer,
+                            scoreSmoothingRadius);
+                    }
+
+                    var cachedResult = new FileScanResult
+                    {
+                        FilePath = Path.GetFullPath(mediaFilePath),
+                        ClipId = Path.GetFileName(mediaFilePath),
+                        FileHash = fileHash,
+                        DurationSeconds = Math.Round(duration, 3),
+                        AudioTrackIndex = audioTrackIndex,
+                        Verdict = cachedVerdict,
+                        MaxConfidence = Math.Round(cachedMaxConf, 4),
+                        Segments = cachedSegments,
+                        WaveformMinPeaks = cachedInfo.WaveformMinPeaks,
+                        WaveformMaxPeaks = cachedInfo.WaveformMaxPeaks,
+                        AnalyzerUsed = cachedSidecarResponse is { HasSpeech: true },
+                        AnalyzerModels = cachedSidecarResponse?.Models
+                    };
+
+                    // Persist scan result to database on cache hit
+                    if (!string.IsNullOrEmpty(fileHash))
+                    {
+                        string segJson = JsonSerializer.Serialize(cachedSegments);
+                        var primaryHit = cachedSegments.FirstOrDefault(s => s.Verdict == "Match") ?? cachedSegments.FirstOrDefault();
+                        await _database.SaveScanResultAsync(
+                            cachedResult.FilePath,
+                            fileHash,
+                            targetProfile.ProfileName,
+                            _embeddingModel.ModelVersion,
+                            threshold,
+                            cachedVerdict,
+                            cachedMaxConf,
+                            segJson,
+                            speakerLabel: primaryHit?.SpeakerLabel,
+                            transcript: primaryHit?.Transcript,
+                            isOffensive: cachedSegments.Any(s => s.IsOffensive),
+                            moderationViolations: cachedSegments.SelectMany(s => s.ModerationViolations).Distinct().ToList(),
+                            cancellationToken: cancellationToken);
+                    }
+
+                    reportProgress?.Invoke(1.0);
+                    return cachedResult;
                 }
-
-                List<DetectedSegment> cachedSegments;
-                double cachedMaxConf;
-                string cachedVerdict;
-
-                if (cachedSidecarResponse != null && cachedSidecarResponse.HasSpeech)
-                {
-                    cachedSegments = MapAndScoreSidecarSegments(
-                        cachedSidecarResponse.Segments,
-                        cachedWindowItems,
-                        targetProfile,
-                        threshold,
-                        normalizer);
-                    cachedMaxConf = cachedSegments.Count > 0 ? cachedSegments.Max(s => s.Confidence) : 0.0;
-                    cachedVerdict = ComputeOverallVerdict(cachedSegments);
-                }
-                else
-                {
-                    (cachedSegments, cachedMaxConf, cachedVerdict) = ScoreAndAggregate(
-                        cachedWindowItems,
-                        targetProfile,
-                        threshold,
-                        clusterDistance,
-                        mergeToleranceSec,
-                        enableClustering,
-                        enableTemporalSmoothing,
-                        peakDelta,
-                        neighborToleranceSec,
-                        normalizer,
-                        scoreSmoothingRadius);
-                }
-
-                var cachedResult = new FileScanResult
-                {
-                    FilePath = Path.GetFullPath(mediaFilePath),
-                    ClipId = Path.GetFileName(mediaFilePath),
-                    FileHash = fileHash,
-                    DurationSeconds = Math.Round(duration, 3),
-                    AudioTrackIndex = audioTrackIndex,
-                    Verdict = cachedVerdict,
-                    MaxConfidence = Math.Round(cachedMaxConf, 4),
-                    Segments = cachedSegments,
-                    WaveformMinPeaks = cachedInfo.WaveformMinPeaks,
-                    WaveformMaxPeaks = cachedInfo.WaveformMaxPeaks
-                };
-
-                // Persist scan result to database on cache hit
-                if (!string.IsNullOrEmpty(fileHash))
-                {
-                    string segJson = JsonSerializer.Serialize(cachedSegments);
-                    var primaryHit = cachedSegments.FirstOrDefault(s => s.Verdict == "Match") ?? cachedSegments.FirstOrDefault();
-                    await _database.SaveScanResultAsync(
-                        cachedResult.FilePath,
-                        fileHash,
-                        targetProfile.ProfileName,
-                        _embeddingModel.ModelVersion,
-                        threshold,
-                        cachedVerdict,
-                        cachedMaxConf,
-                        segJson,
-                        speakerLabel: primaryHit?.SpeakerLabel,
-                        transcript: primaryHit?.Transcript,
-                        isOffensive: cachedSegments.Any(s => s.IsOffensive),
-                        moderationViolations: cachedSegments.SelectMany(s => s.ModerationViolations).Distinct().ToList(),
-                        cancellationToken: cancellationToken);
-                }
-
-                reportProgress?.Invoke(1.0);
-                return cachedResult;
             }
-        }
 
-        // Sidecar check when processing audio
-        SidecarScanResponse? sidecarResponse = null;
-        if (activeSidecar != null)
-        {
+            // CACHE MISS: stream-decode into a temp spool while running VAD, then embed windows read back
+            // from the spool. Memory stays bounded by the batch size however long the recording is.
+            using var spool = new SpooledAudio();
+            var vadStream = _vad.StartProbabilityStream();
+
+            // Decode covers the first half of the file's progress and embedding the second; the decode half
+            // is only reported when ffprobe can tell us the expected length. With a sidecar, the last share waits for it.
+            double expectedSamples = 0.0;
+            if (reportProgress != null)
+            {
+                expectedSamples = await AudioDecoder.GetMediaDurationSecondsAsync(mediaFilePath, cancellationToken) * 16000.0;
+            }
+
+            double workShare = activeSidecar != null ? LocalWorkProgressShare : 1.0;
+            double lastReported = 0.0;
+            void Report(double fraction)
+            {
+                if (reportProgress == null || fraction - lastReported < 0.005 && fraction < 1.0) return;
+                lastReported = fraction;
+                reportProgress(fraction);
+            }
+
+            await foreach (var chunk in AudioDecoder.StreamDecodeAsync(
+                mediaFilePath,
+                audioTrackIndex: audioTrackIndex,
+                sampleRate: 16000,
+                chunkSize: 32000,
+                cancellationToken: cancellationToken))
+            {
+                spool.Append(chunk.Samples);
+                vadStream.Feed(chunk.Samples, chunk.Samples.Length);
+                if (expectedSamples > 0.0) Report(workShare * Math.Min(0.5, 0.5 * spool.SampleCount / expectedSamples));
+                if (pauseGate != null) await pauseGate(cancellationToken);
+            }
+            Report(workShare * 0.5);
+
+            long totalSamples = spool.SampleCount;
+            if (totalSamples == 0)
+            {
+                Logging.VoiceScanLogger.Warn("PipelineScanner", $"Zero audio samples decoded from {mediaFilePath}.");
+                return CreateErrorResult(
+                    mediaFilePath,
+                    audioTrackIndex,
+                    new InvalidDataException("No audio could be decoded: the file has no audio track (or the selected track is empty) or is corrupt."));
+            }
+
+            double durationSeconds = (double)totalSamples / 16000.0;
+            var speechIntervals = WebRtcVad.ProbabilitiesToIntervals(vadStream.Finish(), durationSeconds);
+            var plans = SpeechWindowExtractor.PlanWindows(
+                totalSamples,
+                speechIntervals,
+                sampleRate: 16000,
+                windowSec: windowDurationSec,
+                hopSec: hopDurationSec);
+
+            var windowsToCache = new List<CachedWindow>();
+            var windowItems = new List<WindowItem>();
+
+            if (plans.Count > 0 && targetProfile.Centroid.Length > 0)
+            {
+                // Process windows in batches through GPU embedding model
+                for (int i = 0; i < plans.Count; i += _batchSize)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    if (pauseGate != null) await pauseGate(cancellationToken);
+                    int count = Math.Min(_batchSize, plans.Count - i);
+                    var batchWindows = Enumerable.Range(i, count)
+                        .Select(k => SpeechWindowExtractor.Materialize(
+                            plans[k],
+                            spool.Read(plans[k].SourceStart, plans[k].SourceLength),
+                            16000,
+                            windowDurationSec))
+                        .ToList();
+                    var batchAudios = batchWindows.Select(w => w.AudioSamples).ToList();
+
+                    var batchEmbeddings = _embeddingModel.ExtractEmbeddingsBatch(batchAudios);
+
+                    for (int b = 0; b < count; b++)
+                    {
+                        var win = batchWindows[b];
+                        var emb = batchEmbeddings[b];
+                        double snrDb = AcousticDiagnostics.EstimateSnrDb(win.AudioSamples);
+                        windowsToCache.Add(new CachedWindow(win.StartTimeSeconds, win.EndTimeSeconds, emb, snrDb));
+                        windowItems.Add(new WindowItem(windowItems.Count, win.StartTimeSeconds, win.EndTimeSeconds, emb, snrDb));
+                    }
+
+                    Report(workShare * (0.5 + 0.5 * (i + count) / plans.Count));
+                }
+            }
+
+            var (minPeaks, maxPeaks) = spool.Envelope(300);
+
+            // 4. Save extracted embeddings to SQLite cache
+            if (_database != null && !string.IsNullOrEmpty(cacheKey) && windowsToCache.Count > 0)
+            {
+                await _database.SaveCachedWindowsAsync(
+                    cacheKey,
+                    fileHash,
+                    _embeddingModel.ModelVersion,
+                    vadSettings,
+                    windowSettings,
+                    windowsToCache,
+                    cancellationToken,
+                    new CachedFileInfo(Math.Round(durationSeconds, 3), minPeaks, maxPeaks));
+            }
+
+            SidecarScanResponse? sidecarResponse = await sidecarTask;
             cancellationToken.ThrowIfCancellationRequested();
-            try
+            if (sidecarResponse is { HasSpeech: false })
             {
-                sidecarResponse = await activeSidecar.ScanAudioAsync(mediaFilePath, cancellationToken);
-            }
-            catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
-            {
-                Logging.VoiceScanLogger.Warn("PipelineScanner", $"Sidecar scan failed for {mediaFilePath}: {ex.Message}");
-                sidecarResponse = null;
-            }
-
-            if (sidecarResponse != null && !sidecarResponse.HasSpeech)
-            {
-                double duration = await AudioDecoder.GetMediaDurationSecondsAsync(mediaFilePath, cancellationToken);
                 var noSpeechResult = new FileScanResult
                 {
                     FilePath = Path.GetFullPath(mediaFilePath),
                     ClipId = Path.GetFileName(mediaFilePath),
                     FileHash = fileHash,
-                    DurationSeconds = Math.Round(duration, 3),
+                    DurationSeconds = Math.Round(durationSeconds, 3),
                     AudioTrackIndex = audioTrackIndex,
                     Verdict = "No match",
                     MaxConfidence = 0.0,
                     Segments = new List<DetectedSegment>(),
-                    ReasonFlags = new List<string> { "NO_SPEECH_DETECTED" }
+                    WaveformMinPeaks = minPeaks,
+                    WaveformMaxPeaks = maxPeaks,
+                    ReasonFlags = new List<string> { "NO_SPEECH_DETECTED" },
+                    AnalyzerUsed = true,
+                    AnalyzerModels = sidecarResponse.Models
                 };
 
                 if (_database != null && !string.IsNullOrEmpty(fileHash))
@@ -306,187 +420,156 @@ public sealed class PipelineScanner
                         cancellationToken: cancellationToken);
                 }
 
-                reportProgress?.Invoke(1.0);
+                Report(1.0);
                 return noSpeechResult;
             }
-        }
 
-        // CACHE MISS: stream-decode into a temp spool while running VAD, then embed windows read back
-        // from the spool. Memory stays bounded by the batch size however long the recording is.
-        using var spool = new SpooledAudio();
-        var vadStream = _vad.StartProbabilityStream();
+            List<DetectedSegment> segments;
+            double maxConfidence;
+            string verdict;
 
-        // Decode covers the first half of the file's progress and embedding the second; the decode half
-        // is only reported when ffprobe can tell us the expected length.
-        double expectedSamples = 0.0;
-        if (reportProgress != null)
-        {
-            expectedSamples = await AudioDecoder.GetMediaDurationSecondsAsync(mediaFilePath, cancellationToken) * 16000.0;
-        }
-
-        double lastReported = 0.0;
-        void Report(double fraction)
-        {
-            if (reportProgress == null || fraction - lastReported < 0.005 && fraction < 1.0) return;
-            lastReported = fraction;
-            reportProgress(fraction);
-        }
-
-        await foreach (var chunk in AudioDecoder.StreamDecodeAsync(
-            mediaFilePath,
-            audioTrackIndex: audioTrackIndex,
-            sampleRate: 16000,
-            chunkSize: 32000,
-            cancellationToken: cancellationToken))
-        {
-            spool.Append(chunk.Samples);
-            vadStream.Feed(chunk.Samples, chunk.Samples.Length);
-            if (expectedSamples > 0.0) Report(Math.Min(0.5, 0.5 * spool.SampleCount / expectedSamples));
-            if (pauseGate != null) await pauseGate(cancellationToken);
-        }
-        Report(0.5);
-
-        long totalSamples = spool.SampleCount;
-        if (totalSamples == 0)
-        {
-            Logging.VoiceScanLogger.Warn("PipelineScanner", $"Zero audio samples decoded from {mediaFilePath}.");
-            return CreateErrorResult(
-                mediaFilePath,
-                audioTrackIndex,
-                new InvalidDataException("No audio could be decoded: the file has no audio track (or the selected track is empty) or is corrupt."));
-        }
-
-        double durationSeconds = (double)totalSamples / 16000.0;
-        var speechIntervals = WebRtcVad.ProbabilitiesToIntervals(vadStream.Finish(), durationSeconds);
-        var plans = SpeechWindowExtractor.PlanWindows(
-            totalSamples,
-            speechIntervals,
-            sampleRate: 16000,
-            windowSec: windowDurationSec,
-            hopSec: hopDurationSec);
-
-        var windowsToCache = new List<CachedWindow>();
-        var windowItems = new List<WindowItem>();
-
-        if (plans.Count > 0 && targetProfile.Centroid.Length > 0)
-        {
-            // Process windows in batches through GPU embedding model
-            for (int i = 0; i < plans.Count; i += _batchSize)
+            if (sidecarResponse != null && sidecarResponse.HasSpeech)
             {
-                cancellationToken.ThrowIfCancellationRequested();
-                if (pauseGate != null) await pauseGate(cancellationToken);
-                int count = Math.Min(_batchSize, plans.Count - i);
-                var batchWindows = Enumerable.Range(i, count)
-                    .Select(k => SpeechWindowExtractor.Materialize(
-                        plans[k],
-                        spool.Read(plans[k].SourceStart, plans[k].SourceLength),
-                        16000,
-                        windowDurationSec))
-                    .ToList();
-                var batchAudios = batchWindows.Select(w => w.AudioSamples).ToList();
-
-                var batchEmbeddings = _embeddingModel.ExtractEmbeddingsBatch(batchAudios);
-
-                for (int b = 0; b < count; b++)
-                {
-                    var win = batchWindows[b];
-                    var emb = batchEmbeddings[b];
-                    double snrDb = AcousticDiagnostics.EstimateSnrDb(win.AudioSamples);
-                    windowsToCache.Add(new CachedWindow(win.StartTimeSeconds, win.EndTimeSeconds, emb, snrDb));
-                    windowItems.Add(new WindowItem(windowItems.Count, win.StartTimeSeconds, win.EndTimeSeconds, emb, snrDb));
-                }
-
-                Report(0.5 + 0.5 * (i + count) / plans.Count);
+                segments = MapAndScoreSidecarSegments(
+                    sidecarResponse.Segments,
+                    windowItems,
+                    targetProfile,
+                    threshold,
+                    normalizer,
+                    spool,
+                    _embeddingModel);
+                maxConfidence = segments.Count > 0 ? segments.Max(s => s.Confidence) : 0.0;
+                verdict = ComputeOverallVerdict(segments);
             }
+            else
+            {
+                (segments, maxConfidence, verdict) = ScoreAndAggregate(
+                    windowItems,
+                    targetProfile,
+                    threshold,
+                    clusterDistance,
+                    mergeToleranceSec,
+                    enableClustering,
+                    enableTemporalSmoothing,
+                    peakDelta,
+                    neighborToleranceSec,
+                    normalizer,
+                    scoreSmoothingRadius);
+            }
+
+            var result = new FileScanResult
+            {
+                FilePath = Path.GetFullPath(mediaFilePath),
+                ClipId = Path.GetFileName(mediaFilePath),
+                FileHash = fileHash,
+                DurationSeconds = Math.Round(durationSeconds, 3),
+                AudioTrackIndex = audioTrackIndex,
+                Verdict = verdict,
+                MaxConfidence = Math.Round(maxConfidence, 4),
+                Segments = segments,
+                WaveformMinPeaks = minPeaks,
+                WaveformMaxPeaks = maxPeaks,
+                AnalyzerUsed = sidecarResponse is { HasSpeech: true },
+                AnalyzerModels = sidecarResponse?.Models
+            };
+
+            // 5. Persist scan result to database if active
+            if (_database != null && !string.IsNullOrEmpty(fileHash))
+            {
+                string segJson = JsonSerializer.Serialize(segments);
+                var primaryHit = segments.FirstOrDefault(s => s.Verdict == "Match") ?? segments.FirstOrDefault();
+                await _database.SaveScanResultAsync(
+                    result.FilePath,
+                    fileHash,
+                    targetProfile.ProfileName,
+                    _embeddingModel.ModelVersion,
+                    threshold,
+                    verdict,
+                    maxConfidence,
+                    segJson,
+                    speakerLabel: primaryHit?.SpeakerLabel,
+                    transcript: primaryHit?.Transcript,
+                    isOffensive: segments.Any(s => s.IsOffensive),
+                    moderationViolations: segments.SelectMany(s => s.ModerationViolations).Distinct().ToList(),
+                    cancellationToken: cancellationToken);
+            }
+
+            Report(1.0);
+            return result;
         }
-
-        var (minPeaks, maxPeaks) = spool.Envelope(300);
-
-        // 4. Save extracted embeddings to SQLite cache
-        if (_database != null && !string.IsNullOrEmpty(cacheKey) && windowsToCache.Count > 0)
-        {
-            await _database.SaveCachedWindowsAsync(
-                cacheKey,
-                fileHash,
-                _embeddingModel.ModelVersion,
-                vadSettings,
-                windowSettings,
-                windowsToCache,
-                cancellationToken,
-                new CachedFileInfo(Math.Round(durationSeconds, 3), minPeaks, maxPeaks));
-        }
-
-        List<DetectedSegment> segments;
-        double maxConfidence;
-        string verdict;
-
-        if (sidecarResponse != null && sidecarResponse.HasSpeech)
-        {
-            segments = MapAndScoreSidecarSegments(
-                sidecarResponse.Segments,
-                windowItems,
-                targetProfile,
-                threshold,
-                normalizer,
-                spool,
-                _embeddingModel);
-            maxConfidence = segments.Count > 0 ? segments.Max(s => s.Confidence) : 0.0;
-            verdict = ComputeOverallVerdict(segments);
-        }
-        else
-        {
-            (segments, maxConfidence, verdict) = ScoreAndAggregate(
-                windowItems,
-                targetProfile,
-                threshold,
-                clusterDistance,
-                mergeToleranceSec,
-                enableClustering,
-                enableTemporalSmoothing,
-                peakDelta,
-                neighborToleranceSec,
-                normalizer,
-                scoreSmoothingRadius);
-        }
-
-        var result = new FileScanResult
-        {
-            FilePath = Path.GetFullPath(mediaFilePath),
-            ClipId = Path.GetFileName(mediaFilePath),
-            FileHash = fileHash,
-            DurationSeconds = Math.Round(durationSeconds, 3),
-            AudioTrackIndex = audioTrackIndex,
-            Verdict = verdict,
-            MaxConfidence = Math.Round(maxConfidence, 4),
-            Segments = segments,
-            WaveformMinPeaks = minPeaks,
-            WaveformMaxPeaks = maxPeaks
-        };
-
-        // 5. Persist scan result to database if active
-        if (_database != null && !string.IsNullOrEmpty(fileHash))
-        {
-            string segJson = JsonSerializer.Serialize(segments);
-            var primaryHit = segments.FirstOrDefault(s => s.Verdict == "Match") ?? segments.FirstOrDefault();
-            await _database.SaveScanResultAsync(
-                result.FilePath,
-                fileHash,
-                targetProfile.ProfileName,
-                _embeddingModel.ModelVersion,
-                threshold,
-                verdict,
-                maxConfidence,
-                segJson,
-                speakerLabel: primaryHit?.SpeakerLabel,
-                transcript: primaryHit?.Transcript,
-                isOffensive: segments.Any(s => s.IsOffensive),
-                moderationViolations: segments.SelectMany(s => s.ModerationViolations).Distinct().ToList(),
-                cancellationToken: cancellationToken);
-        }
-
-        Report(1.0);
-        return result;
     }
+
+    /// <summary>
+    /// The sidecar's analysis of the file: from the scan database when this file, track, preset, sidecar pipeline
+    /// version and model set were analysed before, otherwise from the sidecar (and then cached). Null when the
+    /// sidecar fails or the scan is cancelled.
+    /// </summary>
+    private async Task<SidecarScanResponse?> RunSidecarAsync(
+        IInferenceClient sidecar, string mediaFilePath, string fileHash, int audioTrackIndex, CancellationToken ct)
+    {
+        try
+        {
+            var request = new SidecarAnalysisRequest(AudioTrackIndex: audioTrackIndex);
+            var cacheEntry = await SidecarCacheEntryAsync(sidecar, fileHash, request, ct);
+            if (cacheEntry is { } hit && await _database!.GetCachedSidecarResponseAsync(hit.Key, ct) is { } json)
+            {
+                var cached = JsonSerializer.Deserialize<SidecarScanResponse>(json);
+                if (cached != null) return cached;
+            }
+
+            var response = await sidecar.AnalyseAsync(mediaFilePath, request, ct);
+            // A model swapped between reading the models and analysing must not be cached under the old key.
+            if (cacheEntry is { } entry && SameModels(response.Models, entry.Status.Models))
+            {
+                await _database!.SaveCachedSidecarResponseAsync(entry.Key, fileHash, JsonSerializer.Serialize(response), ct);
+            }
+            return response;
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            return null;
+        }
+        catch (Exception ex)
+        {
+            Logging.VoiceScanLogger.Warn("PipelineScanner", $"Sidecar scan failed for {mediaFilePath}: {ex.Message}");
+            return null;
+        }
+    }
+
+    /// <summary>Cache key and the model status it was built from; null when the answer must not be cached.</summary>
+    private async Task<(string Key, SidecarModelStatus Status)?> SidecarCacheEntryAsync(
+        IInferenceClient sidecar, string fileHash, SidecarAnalysisRequest request, CancellationToken ct)
+    {
+        if (_database == null || string.IsNullOrEmpty(fileHash) || sidecar is not ISidecarModelControl control)
+        {
+            return null;
+        }
+
+        SidecarModelStatus status;
+        try
+        {
+            status = await control.GetModelsAsync(ct);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
+        {
+            return null;
+        }
+
+        if (!status.Ready || string.IsNullOrEmpty(status.PipelineVersion))
+        {
+            return null;
+        }
+
+        string models = string.Join(';', status.Models
+            .OrderBy(kv => kv.Key, StringComparer.Ordinal)
+            .Select(kv => $"{kv.Key}={kv.Value}:{(status.Loaded.GetValueOrDefault(kv.Key) ? 1 : 0)}"));
+        string raw = string.Create(CultureInfo.InvariantCulture,
+            $"{fileHash}|trk:{request.AudioTrackIndex}|{request.Preset}|v:{status.PipelineVersion}|{models}");
+        return (Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(raw))), status);
+    }
+
+    private static bool SameModels(IReadOnlyDictionary<string, string>? a, IReadOnlyDictionary<string, string> b) =>
+        a != null && a.Count == b.Count && a.All(kv => b.TryGetValue(kv.Key, out var v) && v == kv.Value);
 
     private static List<DetectedSegment> MapAndScoreSidecarSegments(
         IReadOnlyList<DetectedSegment> sidecarSegments,

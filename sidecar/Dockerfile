@@ -23,7 +23,7 @@ RUN /opt/venv/bin/pip install --no-cache-dir torch torchaudio --index-url https:
 COPY requirements.txt /app/
 RUN /opt/venv/bin/pip install --no-cache-dir -r requirements.txt
 
-COPY inference_server.py /app/
+COPY inference_server.py pipeline_logic.py /app/
 
 EXPOSE 54321
 

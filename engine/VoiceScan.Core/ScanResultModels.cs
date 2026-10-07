@@ -81,6 +81,14 @@ public sealed class FileScanResult
     [JsonPropertyName("reason_flags")]
     public List<string> ReasonFlags { get; set; } = new();
 
+    /// <summary>True when the transcription/moderation sidecar analysed this file (segments carry its transcripts).</summary>
+    [JsonPropertyName("analyzer_used")]
+    public bool AnalyzerUsed { get; set; }
+
+    /// <summary>Sidecar models (per stage) that produced the transcripts and scores, when the sidecar reported them.</summary>
+    [JsonPropertyName("analyzer_models")]
+    public Dictionary<string, string>? AnalyzerModels { get; set; }
+
     /// <summary>Set (with Verdict "Error") when the file could not be scanned.</summary>
     [JsonPropertyName("error")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]

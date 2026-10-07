@@ -230,6 +230,26 @@ public sealed class VoiceScanDatabase : IDisposable
             await cmd.ExecuteNonQueryAsync(cancellationToken);
             await tx.CommitAsync(cancellationToken);
         }
+
+        if (currentVersion < 6)
+        {
+            using var tx = connection.BeginTransaction();
+            using var cmd = connection.CreateCommand();
+            cmd.Transaction = tx;
+            cmd.CommandText = @"
+                CREATE TABLE IF NOT EXISTS sidecar_cache (
+                    cache_key TEXT PRIMARY KEY,
+                    file_hash TEXT NOT NULL,
+                    response_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_sidecar_cache_file ON sidecar_cache (file_hash);
+                INSERT INTO schema_migrations (version, applied_at, description)
+                VALUES (6, datetime('now'), 'Cache of sidecar analysis responses');
+            ";
+            await cmd.ExecuteNonQueryAsync(cancellationToken);
+            await tx.CommitAsync(cancellationToken);
+        }
     }
 
     #region Cache Key Computation
@@ -362,6 +382,46 @@ public sealed class VoiceScanDatabase : IDisposable
 
         int rows = await cmd.ExecuteNonQueryAsync(cancellationToken);
         return rows > 0;
+    }
+
+    #endregion
+
+    #region Sidecar Cache
+
+    /// <summary>The cached sidecar response JSON for <paramref name="cacheKey"/>, or null.</summary>
+    public async Task<string?> GetCachedSidecarResponseAsync(string cacheKey, CancellationToken cancellationToken = default)
+    {
+        await EnsureInitializedAsync(cancellationToken);
+        using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync(cancellationToken);
+
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = "SELECT response_json FROM sidecar_cache WHERE cache_key = @key;";
+        cmd.Parameters.AddWithValue("@key", cacheKey);
+        return await cmd.ExecuteScalarAsync(cancellationToken) as string;
+    }
+
+    public async Task SaveCachedSidecarResponseAsync(
+        string cacheKey,
+        string fileHash,
+        string responseJson,
+        CancellationToken cancellationToken = default)
+    {
+        await EnsureInitializedAsync(cancellationToken);
+        using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync(cancellationToken);
+
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = @"
+            INSERT INTO sidecar_cache (cache_key, file_hash, response_json, created_at)
+            VALUES (@key, @fhash, @json, datetime('now'))
+            ON CONFLICT(cache_key) DO UPDATE SET
+                response_json = excluded.response_json,
+                created_at = excluded.created_at;";
+        cmd.Parameters.AddWithValue("@key", cacheKey);
+        cmd.Parameters.AddWithValue("@fhash", fileHash);
+        cmd.Parameters.AddWithValue("@json", responseJson);
+        await cmd.ExecuteNonQueryAsync(cancellationToken);
     }
 
     #endregion

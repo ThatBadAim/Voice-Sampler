@@ -11,6 +11,12 @@ public sealed class UserSettings
     public bool UseTemporalSmoothing { get; set; } = true;
     /// <summary>AHC stopping distance chosen by the user; null uses the embedding model's measured default.</summary>
     public double? ClusterThreshold { get; set; }
+    /// <summary>Classifier score at or above which a transcribed line is listed as an incident.</summary>
+    public double ModerationSensitivity { get; set; } = 0.5;
+    /// <summary>Voice-embedding model chosen on the Models page; null uses the built-in ECAPA-TDNN.</summary>
+    public string? EmbeddingModelId { get; set; }
+    /// <summary>Id of the selected <see cref="Models.AppTheme"/>; null or unknown ids fall back to the default theme.</summary>
+    public string? ThemeId { get; set; }
 }
 
 /// <summary>Persists <see cref="UserSettings"/> as JSON. Settings are a convenience, so I/O problems never surface to the user.</summary>

@@ -2,6 +2,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:vm="using:VoiceScan.App.Core.ViewModels"
         xmlns:views="using:VoiceScan.App.Views"
+        xmlns:models="using:VoiceScan.App.Core.Models"
         x:Class="VoiceScan.App.MainWindow"
         x:DataType="vm:MainAppViewModel"
         Title="{Binding WindowTitle}"
@@ -13,23 +14,59 @@
         <DataTemplate DataType="vm:ResultsViewModel"><views:ResultsView /></DataTemplate>
         <DataTemplate DataType="vm:ReviewViewModel"><views:ReviewView /></DataTemplate>
         <DataTemplate DataType="vm:EnrollmentWizardViewModel"><views:EnrollmentWizardView /></DataTemplate>
+        <DataTemplate DataType="vm:IncidentsViewModel"><views:IncidentsView /></DataTemplate>
+        <DataTemplate DataType="vm:ClipsViewModel"><views:ClipsView /></DataTemplate>
+        <DataTemplate DataType="vm:SpeakersViewModel"><views:SpeakersView /></DataTemplate>
+        <DataTemplate DataType="vm:ModelsViewModel"><views:ModelsView /></DataTemplate>
     </Window.DataTemplates>
 
-    <DockPanel>
+    <DockPanel x:Name="RootPanel">
+        <DockPanel.Transitions>
+            <Transitions>
+                <DoubleTransition Property="Opacity" Duration="0:0:0.12" />
+            </Transitions>
+        </DockPanel.Transitions>
         <Border x:Name="Sidebar" DockPanel.Dock="Left" Width="264" Padding="16,32,16,24"
                 Background="{DynamicResource SidebarBrush}"
                 BorderBrush="{DynamicResource HairlineBrush}" BorderThickness="0,0,1,0">
+            <Border.Transitions>
+                <Transitions>
+                    <DoubleTransition Property="Width" Duration="0:0:0.22" Easing="CubicEaseOut" />
+                    <ThicknessTransition Property="Padding" Duration="0:0:0.22" Easing="CubicEaseOut" />
+                </Transitions>
+            </Border.Transitions>
             <DockPanel>
                 <StackPanel DockPanel.Dock="Bottom" Spacing="16" Margin="0,16,0,0">
                     <Border Classes="divider" />
-                    <Button Classes="nav" Click="ThemeToggle_Click">
+                    <Button Classes="nav">
+                        <Button.Flyout>
+                            <Flyout Placement="TopEdgeAlignedLeft">
+                                <ItemsControl ItemsSource="{Binding Themes}" MinWidth="180">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate x:DataType="models:AppTheme">
+                                            <Button Classes="swatch" Tag="{Binding Id}" Click="ThemeOption_Click">
+                                                <StackPanel Orientation="Horizontal" Spacing="12">
+                                                    <Border Classes="swatch-chip" Background="{Binding BackgroundHex}">
+                                                        <Ellipse Width="10" Height="10" Fill="{Binding AccentHex}"
+                                                                 HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                                    </Border>
+                                                    <TextBlock Text="{Binding Name}" VerticalAlignment="Center" />
+                                                </StackPanel>
+                                            </Button>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </Flyout>
+                        </Button.Flyout>
                         <StackPanel Orientation="Horizontal" Spacing="14">
                             <PathIcon Data="{StaticResource IconTheme}" />
-                            <TextBlock Classes="navlabel" Text="Toggle theme" />
+                            <TextBlock Classes="navlabel" Text="Theme" />
                         </StackPanel>
                     </Button>
                 </StackPanel>
-                <StackPanel Spacing="4">
+                <Grid>
+                <Border x:Name="NavIndicator" Height="0" />
+                <StackPanel x:Name="NavStack" Spacing="4">
                     <TextBlock x:Name="Wordmark" Text="VoiceScan" FontSize="22" FontWeight="Light" LetterSpacing="-0.3"
                                Margin="16,0,16,48" />
                     <Button x:Name="NavEnrollment" Classes="nav" Click="Nav_Click" Tag="Enrollment">
@@ -56,7 +93,34 @@
                             <TextBlock Classes="navlabel" Text="Review" />
                         </StackPanel>
                     </Button>
+                    <Border Classes="divider" Margin="0,12" />
+                    <Button x:Name="NavIncidents" Classes="nav" Click="Nav_Click" Tag="Incidents">
+                        <StackPanel Orientation="Horizontal" Spacing="14">
+                            <PathIcon Data="{StaticResource IconAlert}" />
+                            <TextBlock Classes="navlabel" Text="Incidents" />
+                        </StackPanel>
+                    </Button>
+                    <Button x:Name="NavClips" Classes="nav" Click="Nav_Click" Tag="Clips">
+                        <StackPanel Orientation="Horizontal" Spacing="14">
+                            <PathIcon Data="{StaticResource IconClip}" />
+                            <TextBlock Classes="navlabel" Text="Clips" />
+                        </StackPanel>
+                    </Button>
+                    <Button x:Name="NavSpeakers" Classes="nav" Click="Nav_Click" Tag="Speakers">
+                        <StackPanel Orientation="Horizontal" Spacing="14">
+                            <PathIcon Data="{StaticResource IconPeople}" />
+                            <TextBlock Classes="navlabel" Text="Speakers" />
+                        </StackPanel>
+                    </Button>
+                    <Border Classes="divider" Margin="0,12" />
+                    <Button x:Name="NavModels" Classes="nav" Click="Nav_Click" Tag="Models">
+                        <StackPanel Orientation="Horizontal" Spacing="14">
+                            <PathIcon Data="{StaticResource IconModel}" />
+                            <TextBlock Classes="navlabel" Text="Models" />
+                        </StackPanel>
+                    </Button>
                 </StackPanel>
+                </Grid>
             </DockPanel>
         </Border>
 
@@ -66,6 +130,18 @@
                        Foreground="{DynamicResource VerdictPossibleBrush}" />
         </Border>
 
-        <ContentControl x:Name="PageHost" Margin="48" />
+        <TransitioningContentControl x:Name="PageHost" Margin="48">
+            <TransitioningContentControl.Transitions>
+                <Transitions>
+                    <ThicknessTransition Property="Margin" Duration="0:0:0.22" Easing="CubicEaseOut" />
+                </Transitions>
+            </TransitioningContentControl.Transitions>
+            <TransitioningContentControl.PageTransition>
+                <CompositePageTransition>
+                    <CrossFade Duration="0:0:0.22" />
+                    <PageSlide Duration="0:0:0.28" Orientation="Vertical" SlideInEasing="CubicEaseOut" SlideOutEasing="CubicEaseIn" />
+                </CompositePageTransition>
+            </TransitioningContentControl.PageTransition>
+        </TransitioningContentControl>
     </DockPanel>
 </Window>

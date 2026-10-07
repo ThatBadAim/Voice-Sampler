@@ -37,7 +37,7 @@ VoiceScan is a fully offline cross-platform (Windows + Linux) application that e
 ## 6. Where Specs Live
 - **Architecture & System Design:** `DESIGN.md`
 - **Base Version Acceptance & Checklist:** `docs/BASE-VERSION.md`
-- **Phase Acceptance Specifications:** `docs/SPEC-phase*.md` (Current: `docs/SPEC-phase1.md`)
+- **Phase Acceptance Specifications:** `docs/SPEC-phase*.md` (Current: `docs/SPEC-phase1.md`; active feature work: `docs/SPEC-phase-moderation.md`, `docs/SPEC-model-swap.md`, `docs/SPEC-scan-speed-accuracy.md`)
 - **Model & Dataset Licenses:** `docs/LICENSES.md`
 - **Evaluation Reports & Logs:** `docs/` (`baseline-report.md`, `accuracy-log.md`)
 

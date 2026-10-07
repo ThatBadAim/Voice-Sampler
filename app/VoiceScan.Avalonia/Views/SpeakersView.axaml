@@ -1,0 +1,196 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:VoiceScan.App.Core.ViewModels"
+             xmlns:m="using:VoiceScan.App.Core.Models"
+             x:Class="VoiceScan.App.Views.SpeakersView"
+             x:DataType="vm:SpeakersViewModel">
+
+    <Grid x:Name="Split" ColumnDefinitions="380,40,*">
+        <Border x:Name="ListPane" Classes="panel">
+            <DockPanel>
+                <StackPanel DockPanel.Dock="Top" Spacing="12" Margin="0,0,0,16">
+                    <TextBlock Text="Speakers" Classes="heading" />
+                    <TextBox Text="{Binding SearchText}" PlaceholderText="Search by name or notes" />
+                </StackPanel>
+
+                <Border DockPanel.Dock="Top" Classes="callout" IsVisible="{Binding IsEmpty}">
+                    <TextBlock TextWrapping="Wrap"
+                               Text="No speakers yet. Voices heard in analysed clips are listed here and linked across clips when they sound alike." />
+                </Border>
+
+                <ListBox ItemsSource="{Binding Speakers}" SelectedItem="{Binding SelectedSpeaker}">
+                    <ListBox.ItemTemplate>
+                        <DataTemplate x:DataType="m:SpeakerItem">
+                            <StackPanel Spacing="6" Margin="0,4">
+                                <StackPanel Orientation="Horizontal" Spacing="8">
+                                    <TextBlock Text="{Binding DisplayName}" FontWeight="Medium" VerticalAlignment="Center" />
+                                    <Border Classes="badge" Background="{DynamicResource VerdictErrorSoftBrush}" IsVisible="{Binding HasIncidents}">
+                                        <TextBlock Foreground="{DynamicResource VerdictErrorBrush}">
+                                            <Run Text="{Binding IncidentCount}" /><Run Text=" incident(s)" />
+                                        </TextBlock>
+                                    </Border>
+                                </StackPanel>
+                                <TextBlock Classes="secondary">
+                                    <Run Text="{Binding ClipCount}" /><Run Text=" clip(s) · " /><Run Text="{Binding TalkTimeText}" />
+                                    <Run Text=" talk time · last seen " /><Run Text="{Binding LastSeenText}" />
+                                </TextBlock>
+                                <TextBlock Text="{Binding ProfileText}" Classes="secondary" FontSize="11"
+                                           IsVisible="{Binding ProfileText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                            </StackPanel>
+                        </DataTemplate>
+                    </ListBox.ItemTemplate>
+                </ListBox>
+            </DockPanel>
+        </Border>
+
+        <ScrollViewer x:Name="DetailPane" Grid.Column="2">
+            <StackPanel Spacing="40">
+                <Border Classes="card" IsVisible="{Binding !HasSelection}">
+                    <TextBlock Classes="heading" Text="Select a speaker to see everything known about them." TextWrapping="Wrap" />
+                </Border>
+
+                <Border Classes="card" IsVisible="{Binding HasSelection}">
+                    <StackPanel Spacing="16">
+                        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                            <TextBox Text="{Binding EditName}" PlaceholderText="Name or alias" FontSize="18" />
+                            <Button Grid.Column="1" Content="Save name" Command="{Binding SaveNameCommand}" />
+                        </Grid>
+                        <TextBlock Text="{Binding DetailSummaryText}" Classes="secondary" TextWrapping="Wrap" />
+                        <TextBlock Text="{Binding ProfileText}" Classes="secondary" TextWrapping="Wrap"
+                                   IsVisible="{Binding ProfileText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+
+                        <StackPanel Spacing="8">
+                            <TextBlock Text="Voice sample" Classes="secondary" FontSize="11" />
+                            <StackPanel Orientation="Horizontal" Spacing="12">
+                                <Button Command="{Binding PlaySampleCommand}" ToolTip.Tip="Plays this speaker's longest line">
+                                    <StackPanel Orientation="Horizontal" Spacing="12">
+                                        <PathIcon Data="{StaticResource IconPlay}" />
+                                        <TextBlock Text="Play sample" />
+                                    </StackPanel>
+                                </Button>
+                                <Button Command="{Binding StopCommand}" IsEnabled="{Binding Player.IsPlaying}">
+                                    <StackPanel Orientation="Horizontal" Spacing="12">
+                                        <PathIcon Data="{StaticResource IconStop}" />
+                                        <TextBlock Text="Stop" />
+                                    </StackPanel>
+                                </Button>
+                            </StackPanel>
+                            <TextBlock Classes="secondary" TextWrapping="Wrap" IsVisible="{Binding VoiceSample, Converter={x:Static ObjectConverters.IsNotNull}}">
+                                <Run Text="{Binding VoiceSample.ClipName}" /><Run Text=" · " /><Run Text="{Binding VoiceSample.RangeText}" />
+                                <Run Text=" · " /><Run Text="{Binding VoiceSample.Transcript}" />
+                            </TextBlock>
+                        </StackPanel>
+
+                        <StackPanel Spacing="8">
+                            <TextBlock Text="Notes" Classes="secondary" FontSize="11" />
+                            <TextBox Text="{Binding Notes}" PlaceholderText="Anything you know about this person" AcceptsReturn="True" MinHeight="80" TextWrapping="Wrap" />
+                            <Button Content="Save notes" Command="{Binding SaveNotesCommand}" HorizontalAlignment="Left" />
+                        </StackPanel>
+                        <TextBlock Text="{Binding StatusMessage}" Classes="secondary" TextWrapping="Wrap" />
+                    </StackPanel>
+                </Border>
+
+                <Border Classes="card" IsVisible="{Binding HasSelection}">
+                    <StackPanel Spacing="16">
+                        <TextBlock Text="Appearances" Classes="heading" />
+                        <TextBlock Classes="secondary" TextWrapping="Wrap"
+                                   Text="Clips are linked to this speaker by voice. A low voice-match score may be a different person: select the clip and move it." />
+                        <ListBox ItemsSource="{Binding Appearances}" SelectedItem="{Binding SelectedAppearance}" MaxHeight="360">
+                            <ListBox.ItemTemplate>
+                                <DataTemplate x:DataType="m:AppearanceItem">
+                                    <StackPanel Spacing="4" Margin="0,4">
+                                        <StackPanel Orientation="Horizontal" Spacing="8">
+                                            <TextBlock Text="{Binding ClipName}" FontWeight="Medium" VerticalAlignment="Center" />
+                                            <Border Classes="badge" Background="{DynamicResource VerdictErrorSoftBrush}" IsVisible="{Binding HasIncidents}">
+                                                <TextBlock Foreground="{DynamicResource VerdictErrorBrush}">
+                                                    <Run Text="{Binding IncidentCount}" /><Run Text=" incident(s)" />
+                                                </TextBlock>
+                                            </Border>
+                                        </StackPanel>
+                                        <TextBlock Classes="secondary" TextWrapping="Wrap">
+                                            <Run Text="{Binding RecordedText}" /><Run Text=" · " /><Run Text="{Binding LocalLabel}" />
+                                            <Run Text=" · " /><Run Text="{Binding TalkTimeText}" /><Run Text=" talk time between " />
+                                            <Run Text="{Binding SpanText}" /><Run Text=" · " /><Run Text="{Binding MatchText}" />
+                                        </TextBlock>
+                                    </StackPanel>
+                                </DataTemplate>
+                            </ListBox.ItemTemplate>
+                        </ListBox>
+                        <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="8">
+                            <TextBlock Text="Move selected clip to" Classes="secondary" VerticalAlignment="Center" />
+                            <ComboBox Grid.Column="1" HorizontalAlignment="Stretch" ItemsSource="{Binding MoveTargets}" SelectedItem="{Binding MoveTarget}">
+                                <ComboBox.ItemTemplate>
+                                    <DataTemplate x:DataType="m:SpeakerChoice">
+                                        <TextBlock Text="{Binding Name}" />
+                                    </DataTemplate>
+                                </ComboBox.ItemTemplate>
+                            </ComboBox>
+                            <Button Grid.Column="2" Content="Move" Command="{Binding MoveAppearanceCommand}" />
+                        </Grid>
+                    </StackPanel>
+                </Border>
+
+                <Border Classes="card" IsVisible="{Binding HasSelection}">
+                    <StackPanel Spacing="16">
+                        <TextBlock Text="Incidents" Classes="heading" />
+                        <TextBlock Text="No incidents at the current sensitivity." Classes="secondary"
+                                   IsVisible="{Binding !Incidents.Count}" />
+                        <ItemsControl ItemsSource="{Binding Incidents}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate x:DataType="m:UtteranceItem">
+                                    <Grid ColumnDefinitions="Auto,*" ColumnSpacing="12" Margin="0,6">
+                                        <Button VerticalAlignment="Top" ToolTip.Tip="Listen to this line"
+                                                Command="{Binding $parent[UserControl].((vm:SpeakersViewModel)DataContext).PlayUtteranceCommand}"
+                                                CommandParameter="{Binding}">
+                                            <PathIcon Data="{StaticResource IconPlay}" />
+                                        </Button>
+                                        <StackPanel Grid.Column="1" Spacing="4">
+                                            <StackPanel Orientation="Horizontal" Spacing="8">
+                                                <Border Classes="badge" Background="{DynamicResource VerdictErrorSoftBrush}">
+                                                    <TextBlock Text="{Binding CategoriesText}" Foreground="{DynamicResource VerdictErrorBrush}" />
+                                                </Border>
+                                                <TextBlock Text="{Binding ScoreText}" FontWeight="SemiBold" VerticalAlignment="Center" />
+                                                <TextBlock Text="{Binding StatusText}" Classes="secondary" VerticalAlignment="Center" />
+                                            </StackPanel>
+                                            <TextBlock Classes="secondary">
+                                                <Run Text="{Binding ClipName}" /><Run Text=" · " /><Run Text="{Binding StartText}" />
+                                            </TextBlock>
+                                            <SelectableTextBlock Text="{Binding Transcript}" TextWrapping="Wrap" />
+                                            <TextBlock Text="{Binding Note}" Classes="secondary" TextWrapping="Wrap" FontStyle="Italic"
+                                                       IsVisible="{Binding Note, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                                        </StackPanel>
+                                    </Grid>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </StackPanel>
+                </Border>
+
+                <Border Classes="card" IsVisible="{Binding HasSelection}">
+                    <StackPanel Spacing="16">
+                        <TextBlock Text="Everything they said" Classes="heading" />
+                        <ItemsControl ItemsSource="{Binding Transcript}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate x:DataType="m:UtteranceItem">
+                                    <Grid ColumnDefinitions="Auto,*" ColumnSpacing="12" Margin="0,4">
+                                        <Button VerticalAlignment="Top" ToolTip.Tip="Listen to this line"
+                                                Command="{Binding $parent[UserControl].((vm:SpeakersViewModel)DataContext).PlayUtteranceCommand}"
+                                                CommandParameter="{Binding}">
+                                            <PathIcon Data="{StaticResource IconPlay}" />
+                                        </Button>
+                                        <StackPanel Grid.Column="1" Spacing="2">
+                                            <TextBlock Classes="secondary" FontSize="11">
+                                                <Run Text="{Binding ClipName}" /><Run Text=" · " /><Run Text="{Binding StartText}" />
+                                            </TextBlock>
+                                            <SelectableTextBlock Text="{Binding Transcript}" TextWrapping="Wrap" />
+                                        </StackPanel>
+                                    </Grid>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </StackPanel>
+                </Border>
+            </StackPanel>
+        </ScrollViewer>
+    </Grid>
+</UserControl>

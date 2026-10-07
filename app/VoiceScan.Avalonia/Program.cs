@@ -7,18 +7,18 @@ internal static class Program
     [STAThread]
     public static void Main(string[] args)
     {
-        VoiceScan.Core.AppPaths.UseBundledTools();
-        VoiceScan.Core.Logging.VoiceScanLogger.Initialize(
-            Path.Combine(VoiceScan.Core.AppPaths.DataRoot, "logs", "voicescan.log"));
-        VoiceScan.App.Services.CrashHandler.Install();
         try
         {
+            VoiceScan.Core.AppPaths.UseBundledTools();
+            VoiceScan.Core.Logging.VoiceScanLogger.Initialize(
+                Path.Combine(VoiceScan.Core.AppPaths.DataRoot, "logs", "voicescan.log"));
+            VoiceScan.App.Services.CrashHandler.Install();
             BuildAvaloniaApp().StartWithClassicDesktopLifetime(args);
         }
         catch (Exception ex)
         {
-            VoiceScan.Core.Logging.VoiceScanLogger.Fatal("Program", "Fatal error in UI loop", ex);
-            Console.Error.WriteLine(ex);
+            // Nothing else can be relied on here, so use a dialog that does not need Avalonia.
+            VoiceScan.App.Services.CrashHandler.ReportFatalWithoutUi(ex, "VoiceScan hit a fatal error and has to close.");
             Environment.ExitCode = 1;
         }
     }

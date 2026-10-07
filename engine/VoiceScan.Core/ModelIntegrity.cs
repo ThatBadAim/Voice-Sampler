@@ -23,18 +23,33 @@ public static class ModelIntegrity
         string expected = ExpectedHash(fileName)
             ?? throw new InvalidDataException($"'{fileName}' is not a model listed in the bundled manifest; refusing to load it.");
 
-        string actual;
-        using (var stream = File.OpenRead(modelPath))
-        {
-            actual = Convert.ToHexString(SHA256.HashData(stream));
-        }
-
+        string actual = HashFile(modelPath);
         if (!actual.Equals(expected, StringComparison.OrdinalIgnoreCase))
         {
             throw new InvalidDataException(
                 $"Model '{modelPath}' does not match the SHA-256 in models/manifest.json (expected {expected}, got {actual}). Refusing to load it.");
         }
         return actual;
+    }
+
+    /// <summary>Verifies a user-approved model against the SHA-256 recorded when it was approved.</summary>
+    /// <exception cref="InvalidDataException">The file has changed since it was approved.</exception>
+    public static string VerifyHash(string modelPath, string expectedSha256)
+    {
+        string actual = HashFile(modelPath);
+        if (string.IsNullOrEmpty(expectedSha256) || !actual.Equals(expectedSha256, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidDataException(
+                $"Model '{modelPath}' has changed since it was approved (expected SHA-256 {expectedSha256}, got {actual}). Refusing to load it; import it again.");
+        }
+        return actual;
+    }
+
+    /// <summary>SHA-256 of the file as upper-case hex.</summary>
+    public static string HashFile(string path)
+    {
+        using var stream = File.OpenRead(path);
+        return Convert.ToHexString(SHA256.HashData(stream));
     }
 
     /// <summary>SHA-256 recorded for <paramref name="fileName"/> in the bundled manifest, or null when it is not listed.</summary>

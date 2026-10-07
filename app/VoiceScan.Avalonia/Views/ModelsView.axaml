@@ -1,0 +1,121 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:VoiceScan.App.Core.ViewModels"
+             xmlns:m="using:VoiceScan.App.Core.Models"
+             x:Class="VoiceScan.App.Views.ModelsView"
+             x:DataType="vm:ModelsViewModel">
+
+    <ScrollViewer>
+        <StackPanel Spacing="40" MaxWidth="980" HorizontalAlignment="Left">
+            <StackPanel Spacing="8">
+                <TextBlock Text="Models" Classes="heading" />
+                <TextBlock Classes="secondary" TextWrapping="Wrap"
+                           Text="Switch any model without restarting. Clips keep the analysis they were made with until you re-analyse them." />
+                <Border Classes="callout" IsVisible="{Binding StatusMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+                    <TextBlock Text="{Binding StatusMessage}" TextWrapping="Wrap" />
+                </Border>
+            </StackPanel>
+
+            <Border Classes="card">
+                <StackPanel Spacing="16">
+                    <TextBlock Text="Voice model" Classes="heading" />
+                    <TextBlock Classes="secondary" TextWrapping="Wrap"
+                               Text="Turns speech into voice fingerprints for matching enrolled voices and linking speakers across clips. Voices enrolled with one model must be enrolled again after switching." />
+                    <TextBlock Text="{Binding ActiveModelText}" FontWeight="SemiBold" />
+                    <Border Classes="callout" IsVisible="{Binding ReenrollText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+                        <TextBlock Text="{Binding ReenrollText}" TextWrapping="Wrap" />
+                    </Border>
+
+                    <ListBox ItemsSource="{Binding EmbeddingModels}" SelectedItem="{Binding SelectedModel}" MaxHeight="320">
+                        <ListBox.ItemTemplate>
+                            <DataTemplate x:DataType="m:EmbeddingModelItem">
+                                <StackPanel Spacing="4" Margin="0,4">
+                                    <StackPanel Orientation="Horizontal" Spacing="8">
+                                        <TextBlock Text="{Binding DisplayName}" FontWeight="Medium" VerticalAlignment="Center" />
+                                        <Border Classes="badge" Background="{DynamicResource VerdictMatchSoftBrush}" IsVisible="{Binding IsActive}">
+                                            <TextBlock Text="Active" Foreground="{DynamicResource VerdictMatchBrush}" />
+                                        </Border>
+                                        <TextBlock Text="{Binding KindText}" Classes="secondary" VerticalAlignment="Center" />
+                                    </StackPanel>
+                                    <TextBlock Classes="secondary" TextWrapping="Wrap">
+                                        <Run Text="{Binding FrontEndText}" /><Run Text=" · " /><Run Text="{Binding EvaluationText}" />
+                                    </TextBlock>
+                                    <TextBlock Text="{Binding FilePath}" Classes="secondary" FontSize="11" TextTrimming="CharacterEllipsis" />
+                                </StackPanel>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+                    <StackPanel Orientation="Horizontal" Spacing="12">
+                        <Button Content="Use this model" Classes="primary" Command="{Binding UseSelectedModelCommand}" />
+                        <Button Content="Remove imported model" Command="{Binding RemoveSelectedModelCommand}" />
+                    </StackPanel>
+
+                    <Border Classes="divider" Margin="0,8" />
+                    <TextBlock Text="Import a new voice model" Classes="subtitle" />
+                    <TextBlock Classes="secondary" TextWrapping="Wrap"
+                               Text="An .onnx speaker-embedding model with the same input as ECAPA-TDNN or TitaNet. Its checksum is recorded when you import it, and the file is refused if it changes later. Its match threshold is borrowed from the built-in model with the same front-end and is not evaluated." />
+                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                        <TextBox Text="{Binding ImportPath}" PlaceholderText="Path to the .onnx file" />
+                        <Button Grid.Column="1" Content="Choose file…" Click="ChooseModelFile_Click" />
+                    </Grid>
+                    <Grid ColumnDefinitions="*,*" ColumnSpacing="8">
+                        <TextBox Text="{Binding ImportName}" PlaceholderText="Name shown in the app" />
+                        <ComboBox Grid.Column="1" HorizontalAlignment="Stretch" ItemsSource="{Binding FrontEnds}" SelectedItem="{Binding ImportFrontEnd}">
+                            <ComboBox.ItemTemplate>
+                                <DataTemplate x:DataType="m:FrontEndChoice">
+                                    <TextBlock Text="{Binding Name}" />
+                                </DataTemplate>
+                            </ComboBox.ItemTemplate>
+                        </ComboBox>
+                    </Grid>
+                    <Button Content="Import" Command="{Binding ImportCommand}" HorizontalAlignment="Left" />
+                </StackPanel>
+            </Border>
+
+            <Border Classes="card">
+                <StackPanel Spacing="16">
+                    <TextBlock Text="Analysis models (sidecar)" Classes="heading" />
+                    <TextBlock Classes="secondary" TextWrapping="Wrap"
+                               Text="These run in the Python sidecar. Apply loads each changed model while the old one keeps working; if a model fails to load, that stage keeps its previous model. A name that is not already downloaded makes the sidecar download it, so use a local path to stay offline." />
+                    <TextBlock Text="{Binding SidecarStatusText}" FontWeight="SemiBold" TextWrapping="Wrap" />
+                    <ItemsControl ItemsSource="{Binding SidecarStages}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate x:DataType="m:SidecarStageItem">
+                                <StackPanel Spacing="4" Margin="0,8">
+                                    <TextBlock Text="{Binding Label}" FontWeight="Medium" />
+                                    <TextBox Text="{Binding Value}" PlaceholderText="{Binding Hint}" />
+                                    <TextBlock Text="{Binding Hint}" Classes="secondary" FontSize="11" TextWrapping="Wrap" />
+                                    <TextBlock Text="{Binding StateText}" FontSize="11" TextWrapping="Wrap" Classes="secondary"
+                                               IsVisible="{Binding !HasError}" />
+                                    <TextBlock Text="{Binding StateText}" FontSize="11" TextWrapping="Wrap"
+                                               Foreground="{DynamicResource VerdictErrorBrush}" IsVisible="{Binding HasError}" />
+                                </StackPanel>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                    <StackPanel Orientation="Horizontal" Spacing="12">
+                        <Button Content="Apply" Classes="primary" Command="{Binding ApplySidecarModelsCommand}" />
+                        <Button Content="Check again" Command="{Binding RefreshCommand}" />
+                    </StackPanel>
+                    <ProgressBar IsIndeterminate="True" IsVisible="{Binding IsBusy}" />
+                </StackPanel>
+            </Border>
+
+            <Border Classes="card">
+                <StackPanel Spacing="16">
+                    <TextBlock Text="Clips analysed with other models" Classes="heading" />
+                    <TextBlock Text="{Binding OutdatedText}" TextWrapping="Wrap" />
+                    <TextBlock Classes="secondary" TextWrapping="Wrap"
+                               Text="Re-analysing replaces each clip's lines with the active models' results. Speakers and your review decisions carry over to lines at the same time; every run is kept in the clip's history." />
+                    <StackPanel Orientation="Horizontal" Spacing="12">
+                        <ComboBox ItemsSource="{Binding Presets}" SelectedItem="{Binding ReanalysePreset}" MinWidth="140" />
+                        <Button Content="Re-analyse them" Classes="primary" Command="{Binding ReanalyseOutdatedCommand}" />
+                        <Button Content="Cancel" Command="{Binding CancelReanalysisCommand}" IsVisible="{Binding IsReanalysing}" />
+                    </StackPanel>
+                    <ProgressBar IsIndeterminate="True" IsVisible="{Binding IsReanalysing}" />
+                    <TextBlock Text="{Binding ReanalysisText}" Classes="secondary" TextWrapping="Wrap" />
+                </StackPanel>
+            </Border>
+        </StackPanel>
+    </ScrollViewer>
+</UserControl>

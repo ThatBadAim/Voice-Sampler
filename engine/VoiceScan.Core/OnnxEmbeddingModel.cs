@@ -3,6 +3,7 @@ namespace VoiceScan.Core;
 using System;
 using System.Buffers;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
@@ -10,8 +11,9 @@ using Microsoft.ML.OnnxRuntime;
 using Microsoft.ML.OnnxRuntime.Tensors;
 
 /// <summary>
-/// ONNX Runtime implementation of ISpeakerEmbeddingModel for the supported models: SpeechBrain ECAPA-TDNN and
-/// NVIDIA NeMo TitaNet-Small, each fed the feature front-end it was trained with. CUDA is used when available.
+/// ONNX Runtime implementation of ISpeakerEmbeddingModel for the built-in models (SpeechBrain ECAPA-TDNN and NVIDIA NeMo
+/// TitaNet-Small) and user-approved models with the same input layout, each fed the feature front-end it was trained
+/// with. CUDA is used when available.
 /// </summary>
 public sealed class OnnxEmbeddingModel : ISpeakerEmbeddingModel
 {
@@ -23,9 +25,9 @@ public sealed class OnnxEmbeddingModel : ISpeakerEmbeddingModel
 
     private sealed record ModelSpec(
         string ModelId,
+        string DisplayName,
         string FileName,
         FeatureFrontEnd FrontEnd,
-        bool IsTitaNet,
         ModelOperatingPoint OperatingPoint,
         string[] Aliases);
 
@@ -34,9 +36,9 @@ public sealed class OnnxEmbeddingModel : ISpeakerEmbeddingModel
     // distance only merges windows whose average cosine reaches that same impostor p99.9.
     private static readonly ModelSpec[] Supported =
     [
-        new("speechbrain-ecapa-tdnn", "ecapa_tdnn.onnx", FeatureFrontEnd.SpeechBrainFbank, false,
+        new("speechbrain-ecapa-tdnn", "ECAPA-TDNN (SpeechBrain)", "ecapa_tdnn.onnx", FeatureFrontEnd.SpeechBrainFbank,
             new ModelOperatingPoint(Threshold: 0.48, ClusterDistanceThreshold: 0.60), ["ecapa", "ecapa-tdnn", "speechbrain"]),
-        new("nvidia-titanet-small", "titanet_small.onnx", FeatureFrontEnd.NemoMelSpectrogram, true,
+        new("nvidia-titanet-small", "TitaNet-Small (NVIDIA)", "titanet_small.onnx", FeatureFrontEnd.NemoMelSpectrogram,
             new ModelOperatingPoint(Threshold: 0.52, ClusterDistanceThreshold: 0.58), ["titanet", "titanet-small", "nvidia"]),
     ];
 
@@ -50,27 +52,49 @@ public sealed class OnnxEmbeddingModel : ISpeakerEmbeddingModel
     private readonly InferenceSession _session;
     private readonly string _inputName;
     private readonly string _outputName;
-    private readonly ModelSpec _spec;
+    private readonly FeatureFrontEnd _frontEnd;
+    private readonly bool _isTitaNet;
 
-    public string ModelId => _spec.ModelId;
+    public EmbeddingModelEntry Entry { get; }
+    public string ModelId => Entry.ModelId;
     public string ModelVersion { get; }
     public int EmbeddingDimension { get; }
     public string ActiveProvider { get; }
     public bool IsCudaActive { get; }
-    public ModelOperatingPoint OperatingPoint => _spec.OperatingPoint;
+    public ModelOperatingPoint OperatingPoint => Entry.OperatingPoint;
 
     /// <param name="modelNameOrPath">A model id or alias (see <see cref="SupportedModelNames"/>), or the path to a supported model file.</param>
     public OnnxEmbeddingModel(string modelNameOrPath = "ecapa", int deviceId = 0)
+        : this(ResolveBuiltIn(modelNameOrPath), deviceId)
     {
-        (_spec, string modelPath) = Resolve(modelNameOrPath);
+    }
 
-        string sha256 = ModelIntegrity.Verify(modelPath);
-        ModelVersion = $"{_spec.ModelId}@{sha256[..12].ToLowerInvariant()}+{SpeechFeatures.Fingerprint(_spec.FrontEnd)}";
+    /// <summary>
+    /// Loads a catalog entry. Built-in files must match the SHA-256 compiled into the engine; imported files must match
+    /// the SHA-256 recorded when the user approved them.
+    /// </summary>
+    public OnnxEmbeddingModel(EmbeddingModelEntry entry, int deviceId = 0)
+    {
+        Entry = entry;
+        _frontEnd = entry.FrontEnd;
+        _isTitaNet = entry.FrontEnd == FeatureFrontEnd.NemoMelSpectrogram;
+        string modelPath = entry.FilePath;
+
+        string sha256 = entry.IsBuiltIn ? ModelIntegrity.Verify(modelPath) : ModelIntegrity.VerifyHash(modelPath, entry.Sha256);
+        ModelVersion = $"{entry.ModelId}@{sha256[..12].ToLowerInvariant()}+{SpeechFeatures.Fingerprint(_frontEnd)}";
 
         try
         {
             using var options = new SessionOptions { GraphOptimizationLevel = GraphOptimizationLevel.ORT_ENABLE_ALL };
-            options.AppendExecutionProvider_CUDA(deviceId);
+            // The default EXHAUSTIVE search benchmarks every conv algorithm for each new input length; transcript
+            // lines have arbitrary lengths, so that cost would be paid on almost every line.
+            using var cudaOptions = new OrtCUDAProviderOptions();
+            cudaOptions.UpdateOptions(new Dictionary<string, string>
+            {
+                ["device_id"] = deviceId.ToString(CultureInfo.InvariantCulture),
+                ["cudnn_conv_algo_search"] = "HEURISTIC"
+            });
+            options.AppendExecutionProvider_CUDA(cudaOptions);
             _session = new InferenceSession(modelPath, options);
             IsCudaActive = true;
             ActiveProvider = "CUDAExecutionProvider";
@@ -106,15 +130,15 @@ public sealed class OnnxEmbeddingModel : ISpeakerEmbeddingModel
         var features = new FeatureMatrix[batchSize];
         if (batchSize > 1)
         {
-            Parallel.For(0, batchSize, b => features[b] = SpeechFeatures.Compute(audioWindows[b], _spec.FrontEnd));
+            Parallel.For(0, batchSize, b => features[b] = SpeechFeatures.Compute(audioWindows[b], _frontEnd));
         }
         else
         {
-            features[0] = SpeechFeatures.Compute(audioWindows[0], _spec.FrontEnd);
+            features[0] = SpeechFeatures.Compute(audioWindows[0], _frontEnd);
         }
 
         int maxFrames = features.Max(f => f.Frames.GetLength(0));
-        if (_spec.IsTitaNet)
+        if (_isTitaNet)
         {
             maxFrames = (maxFrames + TitaNetPadTo - 1) / TitaNetPadTo * TitaNetPadTo;
         }
@@ -129,7 +153,7 @@ public sealed class OnnxEmbeddingModel : ISpeakerEmbeddingModel
             span.Clear(); // shorter windows must be zero-padded
 
             IReadOnlyCollection<NamedOnnxValue> inputs;
-            if (_spec.IsTitaNet)
+            if (_isTitaNet)
             {
                 // TitaNet expects [batch, 80, frames] and the valid frame count per item.
                 var lengths = new long[batchSize];
@@ -208,6 +232,37 @@ public sealed class OnnxEmbeddingModel : ISpeakerEmbeddingModel
         }
     }
 
+    /// <summary>Built-in models whose files were found, with the SHA-256 the engine expects for each.</summary>
+    public static IReadOnlyList<EmbeddingModelEntry> AvailableBuiltIns()
+    {
+        var entries = new List<EmbeddingModelEntry>();
+        foreach (var spec in Supported)
+        {
+            string? path = FindFile(spec);
+            if (path != null) entries.Add(ToEntry(spec, path));
+        }
+        return entries;
+    }
+
+    /// <summary>Measured operating point of the built-in model that uses <paramref name="frontEnd"/>.</summary>
+    public static ModelOperatingPoint BuiltInOperatingPoint(FeatureFrontEnd frontEnd) =>
+        Supported.First(s => s.FrontEnd == frontEnd).OperatingPoint;
+
+    /// <summary>Display name of the built-in model whose released weights have this SHA-256, or null.</summary>
+    public static string? BuiltInNameForHash(string sha256) =>
+        Supported.FirstOrDefault(s => string.Equals(ModelIntegrity.ExpectedHash(s.FileName), sha256, StringComparison.OrdinalIgnoreCase))
+            ?.DisplayName;
+
+    private static EmbeddingModelEntry ToEntry(ModelSpec spec, string path) => new(
+        spec.ModelId, spec.DisplayName, path, ModelIntegrity.ExpectedHash(spec.FileName) ?? string.Empty,
+        spec.FrontEnd, spec.OperatingPoint, IsBuiltIn: true);
+
+    private static EmbeddingModelEntry ResolveBuiltIn(string modelNameOrPath)
+    {
+        var (spec, path) = Resolve(modelNameOrPath);
+        return ToEntry(spec, path);
+    }
+
     private static (ModelSpec Spec, string Path) Resolve(string modelNameOrPath)
     {
         if (File.Exists(modelNameOrPath))
@@ -228,11 +283,19 @@ public sealed class OnnxEmbeddingModel : ISpeakerEmbeddingModel
                 $"Unknown embedding model '{modelNameOrPath}'. Supported: {string.Join(", ", SupportedModelNames)}.",
                 nameof(modelNameOrPath));
 
+        string path = FindFile(spec)
+            ?? throw new FileNotFoundException(
+                $"Embedding model file '{spec.FileName}' was not found in: {string.Join(", ", AppPaths.ModelSearchDirectories())}.");
+        return (spec, path);
+    }
+
+    private static string? FindFile(ModelSpec spec)
+    {
         // 1. AppContext.BaseDirectory/models/
         string baseDirModel = Path.Combine(AppContext.BaseDirectory, "models", spec.FileName);
         if (File.Exists(baseDirModel))
         {
-            return (spec, Path.GetFullPath(baseDirModel));
+            return Path.GetFullPath(baseDirModel);
         }
 
         // 2. Repo-root models/
@@ -242,14 +305,11 @@ public sealed class OnnxEmbeddingModel : ISpeakerEmbeddingModel
             string repoModel = Path.Combine(repoRoot, "models", spec.FileName);
             if (File.Exists(repoModel))
             {
-                return (spec, Path.GetFullPath(repoModel));
+                return Path.GetFullPath(repoModel);
             }
         }
 
-        string path = AppPaths.FindModel(spec.FileName)
-            ?? throw new FileNotFoundException(
-                $"Embedding model file '{spec.FileName}' was not found in: {string.Join(", ", AppPaths.ModelSearchDirectories())}.");
-        return (spec, path);
+        return AppPaths.FindModel(spec.FileName);
     }
 
     public void Dispose()

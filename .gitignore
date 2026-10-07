@@ -33,6 +33,9 @@ models/*.zip
 !models/README.md
 !models/manifest.json
 
+# Sidecar's saved model choice (per machine)
+sidecar/model_config.json
+
 # Local and OS files
 .DS_Store
 Thumbs.db

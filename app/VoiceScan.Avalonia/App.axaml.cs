@@ -23,7 +23,9 @@ public partial class App : Application
             {
                 var loading = CreateLoadingWindow();
                 desktop.MainWindow = loading;
-                _ = OpenMainWindowAsync(desktop, loading);
+                _ = OpenMainWindowAsync(desktop, loading).ContinueWith(
+                    t => Services.CrashHandler.Report(t.Exception!, "VoiceScan could not finish starting.", fatal: true),
+                    TaskContinuationOptions.OnlyOnFaulted);
             }
         }
         base.OnFrameworkInitializationCompleted();

@@ -51,6 +51,15 @@ public sealed class SidecarManager : IInferenceClient, IAsyncDisposable, IDispos
         return await _client.ProcessAudioAsync(filePath, ct);
     }
 
+    public async Task<SidecarScanResponse> AnalyseAsync(string audioFilePath, SidecarAnalysisRequest request, CancellationToken ct = default)
+    {
+        if (!await EnsureRunningAsync(ct))
+        {
+            throw new InvalidOperationException("The analysis sidecar is not running and could not be started.");
+        }
+        return await _client.AnalyseAsync(audioFilePath, request, ct);
+    }
+
     /// <summary>
     /// Ensures the sidecar service is healthy and responding. If down, attempts to spawn it.
     /// </summary>
@@ -58,8 +67,8 @@ public sealed class SidecarManager : IInferenceClient, IAsyncDisposable, IDispos
     {
         if (_disposed) return false;
 
-        // 1. Fast check if already responding
-        if (await _client.CheckHealthAsync(ct))
+        // 1. Fast check if already responding (a sidecar still loading its models counts: requests wait for it)
+        if (await IsUpAsync(ct))
         {
             return true;
         }
@@ -70,7 +79,7 @@ public sealed class SidecarManager : IInferenceClient, IAsyncDisposable, IDispos
             if (_disposed) return false;
 
             // Double check inside lock
-            if (await _client.CheckHealthAsync(ct))
+            if (await IsUpAsync(ct))
             {
                 return true;
             }
@@ -177,7 +186,7 @@ public sealed class SidecarManager : IInferenceClient, IAsyncDisposable, IDispos
                 return false;
             }
 
-            if (await _client.CheckHealthAsync(ct))
+            if (await IsUpAsync(ct))
             {
                 return true;
             }
@@ -194,6 +203,9 @@ public sealed class SidecarManager : IInferenceClient, IAsyncDisposable, IDispos
 
         return false;
     }
+
+    private async Task<bool> IsUpAsync(CancellationToken ct) =>
+        await _client.GetHealthAsync(ct) is { IsReady: true } or { IsLoading: true };
 
     public static string? LocateInferenceScript()
     {
